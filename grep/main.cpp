@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 #ifdef PLATFORM_WINDOWS
 #define WIN32_LEAN_AND_MEAN					// TODO: Make sure this is the right define for the job.
 #include <Windows.h>
@@ -14,6 +16,7 @@
 #endif
 
 #include <cstring>
+#include <vector>
 
 #define ANSI_ESCAPE_CODE_PREFIX "\033["
 #define ANSI_ESCAPE_CODE_SUFFIX "m"
@@ -58,6 +61,8 @@ void showHelp() {
 	// TODO: implement
 }
 
+char* targetString;
+
 // args validation
 void manageArgs(int argc, char** argv) {
 	switch (argc) {
@@ -65,12 +70,41 @@ void manageArgs(int argc, char** argv) {
 		std::cout << format::error << "too few arguments" << format::endl;
 		showHelp();
 	case 2:
-		
+		targetString = new char[strlen(argv[1] + 1)];
+		strcpy(targetString, argv[1]);
 		return;
 	default:
-		// Too much
-		return;
+		std::cout << format::error << "too many arguments" << format::endl;
+		exit(EXIT_SUCCESS);
 	}
+}
+
+bool isTargetInString(const char* string, size_t stringLen, const char* target, size_t targetLen) {
+	if (targetLen > stringLen) { return false; }
+
+	for (int i = 0; i <= stringLen - targetLen; i++) {
+		if (!strncmp(string + i, target, targetLen)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+char* getLineFromInput() {
+	std::vector<char> buffer;
+	while (true) {
+		int tempchar = getchar();
+		if (tempchar < 0) {
+			return nullptr;
+		}
+		if (tempchar == '\n') { break; }
+		buffer.push_back(tempchar);
+	}
+	buffer.push_back('\0');
+
+	char* anotherBuffer = new char[buffer.size()];
+	memcpy(anotherBuffer, buffer.data(), buffer.size());
+	return anotherBuffer;
 }
 
 int main(int argc, char** argv) {
@@ -83,39 +117,51 @@ int main(int argc, char** argv) {
 
 		color::reset = new char[ANSI_ESCAPE_CODE_MIN_SIZE + 1 + 1];
 		memcpy(color::reset, ANSI_ESCAPE_CODE_PREFIX "0" ANSI_ESCAPE_CODE_SUFFIX, ANSI_ESCAPE_CODE_MIN_SIZE + 1 + 1);
-	}
-	else {
-		color::red = new char[1]; color::red[0] = '\0';
-		color::reset = new char[1]; color::reset[0] = '\0';
+
+		// Allocate format strings.
+		format::error = new char[ANSI_ESCAPE_CODE_MIN_SIZE + 2 + 7 + 1];
+		memcpy(format::error, color::red, ANSI_ESCAPE_CODE_MIN_SIZE + 2);
+		memcpy(format::error + ANSI_ESCAPE_CODE_MIN_SIZE + 2, "ERROR: ", 8);	// This copies the null termination character as well because of 8.
+
+		format::endl = new char[ANSI_ESCAPE_CODE_MIN_SIZE + 1 + 1 + 1];
+		memcpy(format::endl, color::reset, ANSI_ESCAPE_CODE_MIN_SIZE + 1);
+		memcpy(format::endl + ANSI_ESCAPE_CODE_MIN_SIZE + 1, "\n", 2);				// This does too.
 
 #ifdef PLATFORM_WINDOWS			// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping.
-								// If we pipe, we need it enabled and we don't need ANSI key codes, so only do this when we don't pipe.
+		// If we pipe, we need it disabled and we don't need ANSI key codes, so only do this when we don't pipe.
 		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
 		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }
 		DWORD mode;
 		if (!GetConsoleMode(consoleOutputHandle, &mode)) { return EXIT_FAILURE; }
 		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { return EXIT_FAILURE; }
 #endif
+	}
+	else {
+		color::red = new char[1]; color::red[0] = '\0';
+		color::reset = new char[1]; color::reset[0] = '\0';
 
+		format::error = new char[7 + 1];
+		memcpy(format::error, "ERROR: ", 7 + 1);		// This copies null termination along with the message.
+
+		format::endl = new char[1 + 1];
+		memcpy(format::error, "\n", 1 + 1);				// This does too.
 	}
 
-	// TODO: Make this allocation react to if the colors are being done or not, because right now it doesn't.
-
-	// Allocate format strings.
-	format::error = new char[ANSI_ESCAPE_CODE_MIN_SIZE + 2 + 7 + 1];
-	memcpy(format::error, color::red, ANSI_ESCAPE_CODE_MIN_SIZE + 2);
-	memcpy(format::error + ANSI_ESCAPE_CODE_MIN_SIZE + 2, "ERROR: ", 8);	// This copies the null termination character as well because of 8.
-
-	format::endl = new char[ANSI_ESCAPE_CODE_MIN_SIZE + 1 + 1 + 1];
-	memcpy(format::endl, color::reset, ANSI_ESCAPE_CODE_MIN_SIZE + 1);
-	memcpy(format::endl + ANSI_ESCAPE_CODE_MIN_SIZE + 1, "\n\0", 2);
+	manageArgs(argc, argv);
 
 	// Main loop for searching through each line as it comes.
 	while (true) {
-
+		const char* inputString = getLineFromInput();
+		if (!inputString) {
+			break;
+		}
+		if (isTargetInString(inputString, strlen(inputString), targetString, strlen(targetString))) {
+			std::cout << inputString << std::endl;
+		}
+		delete[] inputString;
 	}
 
-	// TODO: Check if the pipe is empty and exit in that case, or else the user always has to interrupt, which is stupid.
-
-	releaseColorStrings();
+	std::cout << "releasing" << std::endl;
+	releaseColorStrings();			// TODO: I think these might not get hit on every necessary failure. Make that not be the case.
+	releaseFormatStrings();
 }
