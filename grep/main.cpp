@@ -111,7 +111,12 @@ std::string getLine() {			// TODO: This needs to be better.
 		if (tempchar < 0) {
 			return "\0";
 		}
-		if (tempchar == '\n') { break; }
+		if (tempchar == '\n') {
+			if (buffer.size() == 0) {
+				continue;					// Skip all the empty lines because our system can't handle those anywhere other than here for now.
+			}
+			break;
+		}
 		buffer.push_back(tempchar);
 	}
 	buffer.push_back('\0');
