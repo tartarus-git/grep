@@ -1,7 +1,7 @@
-#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS		// TODO: See if you can get away with not doing this.
 
 #ifdef PLATFORM_WINDOWS
-#define WIN32_LEAN_AND_MEAN					// TODO: Make sure this is the right define for the job.
+#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #endif
 
@@ -13,9 +13,9 @@
 #include <io.h>
 #else
 #include <unistd.h>
+#include <cstring>
 #endif
 
-#include <cstring>
 #include <vector>
 
 #define ANSI_ESCAPE_CODE_PREFIX "\033["
@@ -28,6 +28,10 @@
 #define fileno(x) _fileno(x)
 #endif
 
+const char* helpText = "grep takes a series of lines as input and outputs lines from input that have the specified string in them.\n" \
+					   "\n" \
+					   "usage: grep <search string>";
+
 bool usingColors = false;
 
 namespace color {
@@ -39,42 +43,52 @@ namespace color {
 	//const char* reset = ANSI_ESCAPE_CODE_PREFIX "0" ANSI_ESCAPE_CODE_SUFFIX;
 }
 
+void releaseColorStrings() {
+	delete[] color::red;
+	delete[] color::reset;
+}
+
 namespace format {
 	char* error;
 	char* endl;
 }
 
-void releaseColorStrings() {
-	if (usingColors) {
-		delete[] color::red;
-	}
-}
-
 void releaseFormatStrings() {
 	delete[] format::error;
+	delete[] format::endl;
+}
+
+void releaseIOStyleStrings() {
+	releaseFormatStrings();
+	releaseColorStrings();
 }
 
 // Shows help text.
 void showHelp() {
-	std::cout << format::error << "help text not implemented" << format::endl;
+	std::cout << helpText << std::endl;
+	releaseIOStyleStrings();
 	exit(EXIT_SUCCESS);
-	// TODO: implement
 }
 
 char* targetString;
+size_t targetString_len;
 
 // args validation
 void manageArgs(int argc, char** argv) {
+	size_t actualLen;
 	switch (argc) {
 	case 1:
 		std::cout << format::error << "too few arguments" << format::endl;
 		showHelp();
 	case 2:
-		targetString = new char[strlen(argv[1] + 1)];
-		strcpy(targetString, argv[1]);
+		targetString_len = strlen(argv[1]);
+		actualLen = targetString_len + 1;
+		targetString = new char[actualLen];
+		memcpy(targetString, argv[1], actualLen);
 		return;
 	default:
 		std::cout << format::error << "too many arguments" << format::endl;
+		releaseIOStyleStrings();
 		exit(EXIT_SUCCESS);
 	}
 }
@@ -83,19 +97,19 @@ bool isTargetInString(const char* string, size_t stringLen, const char* target, 
 	if (targetLen > stringLen) { return false; }
 
 	for (int i = 0; i <= stringLen - targetLen; i++) {
-		if (!strncmp(string + i, target, targetLen)) {
+		if (!strncmp(string + i, target, targetLen)) {			// Why the hell do I have to put ! in front of this. Make sure this is the right way to do it.
 			return true;
 		}
 	}
 	return false;
 }
 
-char* getLineFromInput() {
+std::string getLine() {			// TODO: This needs to be better.
 	std::vector<char> buffer;
 	while (true) {
 		int tempchar = getchar();
 		if (tempchar < 0) {
-			return nullptr;
+			return "\0";
 		}
 		if (tempchar == '\n') { break; }
 		buffer.push_back(tempchar);
@@ -104,13 +118,25 @@ char* getLineFromInput() {
 
 	char* anotherBuffer = new char[buffer.size()];
 	memcpy(anotherBuffer, buffer.data(), buffer.size());
-	return anotherBuffer;
+	
+	std::string result = anotherBuffer;
+	delete[] anotherBuffer;
+	return result;
 }
 
 int main(int argc, char** argv) {
 	// Only enable virtual terminal processing if stdout is a tty. If we're piping, don't do that.
 	if (isatty(fileno(stdout))) {
 		usingColors = true;
+
+#ifdef PLATFORM_WINDOWS			// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping.
+		// If we pipe, we need it disabled and we don't need ANSI key codes, so only do this when we don't pipe.
+		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }
+		DWORD mode;
+		if (!GetConsoleMode(consoleOutputHandle, &mode)) { return EXIT_FAILURE; }
+		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { return EXIT_FAILURE; }
+#endif
 
 		color::red = new char[ANSI_ESCAPE_CODE_MIN_SIZE + 2 + 1];
 		memcpy(color::red, ANSI_ESCAPE_CODE_PREFIX "31" ANSI_ESCAPE_CODE_SUFFIX, ANSI_ESCAPE_CODE_MIN_SIZE + 2 + 1);
@@ -126,15 +152,6 @@ int main(int argc, char** argv) {
 		format::endl = new char[ANSI_ESCAPE_CODE_MIN_SIZE + 1 + 1 + 1];
 		memcpy(format::endl, color::reset, ANSI_ESCAPE_CODE_MIN_SIZE + 1);
 		memcpy(format::endl + ANSI_ESCAPE_CODE_MIN_SIZE + 1, "\n", 2);				// This does too.
-
-#ifdef PLATFORM_WINDOWS			// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping.
-		// If we pipe, we need it disabled and we don't need ANSI key codes, so only do this when we don't pipe.
-		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }
-		DWORD mode;
-		if (!GetConsoleMode(consoleOutputHandle, &mode)) { return EXIT_FAILURE; }
-		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { return EXIT_FAILURE; }
-#endif
 	}
 	else {
 		color::red = new char[1]; color::red[0] = '\0';
@@ -151,17 +168,15 @@ int main(int argc, char** argv) {
 
 	// Main loop for searching through each line as it comes.
 	while (true) {
-		const char* inputString = getLineFromInput();
-		if (!inputString) {
+		std::string inputString = getLine();
+		if (inputString.size() == 0) {
 			break;
 		}
-		if (isTargetInString(inputString, strlen(inputString), targetString, strlen(targetString))) {
+		if (isTargetInString(inputString.c_str(), inputString.size(), targetString, targetString_len)) {
 			std::cout << inputString << std::endl;
 		}
-		delete[] inputString;
 	}
 
-	std::cout << "releasing" << std::endl;
-	releaseColorStrings();			// TODO: I think these might not get hit on every necessary failure. Make that not be the case.
-	releaseFormatStrings();
+	delete[] targetString;
+	releaseIOStyleStrings();
 }
