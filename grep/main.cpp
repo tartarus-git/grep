@@ -157,7 +157,7 @@ void manageArgs(int argc, char** argv) {
 		exit(EXIT_SUCCESS);
 	case 1:
 		{
-			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep;
+			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::optimize;
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
 			keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags);
 		}
@@ -192,10 +192,32 @@ int main(int argc, char** argv) {
 	manageArgs(argc, argv);
 
 	// Main loop for searching through each line as it comes.
+	std::smatch matchData;
+	color::initRed();			// These should probs be put into one function if the release is one function. TODO.
+	color::initReset();
 	while (shouldLoopRun) {
 		std::string line;
-		std::getline(std::cin, line);
+		std::getline(std::cin, line);		// TODO: Make this not hang the sigint process by making it nonblocking and checking it in a loop.
 		if (std::cin.eof()) { break; }
-		if (std::regex_search(line, keyphraseRegex)) { std::cout << line << std::endl; }
+		if (std::regex_match(line, matchData, keyphraseRegex)) {
+			unsigned int offset = 0;
+			std::cout << matchData.size() << std::endl;
+			for (unsigned int i = 0; i < matchData.size(); i++) {
+				int matchPosition = matchData.position(i);
+				std::cout.write(line.c_str() + offset, matchPosition);
+				offset += matchPosition;
+				std::cout << color::red;
+				std::cout.write(line.c_str() + offset, matchData.length(i));
+				offset += matchData.length(i);
+				std::cout << color::reset;
+			}
+			size_t lineEndLen = line.length() - offset;
+			if (lineEndLen != 0) {
+				std::cout.write(line.c_str() + offset, lineEndLen);
+			}
+			std::cout << std::endl;
+		}
+		else { std::cout << "wtf" << std::endl; }
 	}
+	color::release();
 }
