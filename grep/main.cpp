@@ -152,7 +152,9 @@ void manageArgs(int argc, char** argv) {
 		color::initReset();
 		format::initEndl();
 		std::cout << format::error << "too few arguments" << format::endl;
-		showHelp();
+		if (isOutputColored) { showHelp(); }
+		releaseOutputStyling();
+		exit(EXIT_SUCCESS);
 	case 1:
 		{
 			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep;
