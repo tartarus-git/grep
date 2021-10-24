@@ -193,31 +193,29 @@ int main(int argc, char** argv) {
 
 	// Main loop for searching through each line as it comes.
 	std::smatch matchData;
+	// TODO: These get unnecessarily instantiated, even if it is with nothing, even if we don't plan to use them at all.
+	// Solution: Maybe make naked versions of the functions with checks inside them that you can use here.
 	color::initRed();			// These should probs be put into one function if the release is one function. TODO.
 	color::initReset();
 	while (shouldLoopRun) {
 		std::string line;
 		std::getline(std::cin, line);		// TODO: Make this not hang the sigint process by making it nonblocking and checking it in a loop.
 		if (std::cin.eof()) { break; }
-		if (std::regex_match(line, matchData, keyphraseRegex)) {
-			unsigned int offset = 0;
-			std::cout << matchData.size() << std::endl;
-			for (unsigned int i = 0; i < matchData.size(); i++) {
-				int matchPosition = matchData.position(i);
-				std::cout.write(line.c_str() + offset, matchPosition);
-				offset += matchPosition;
+		if (isOutputColored) {
+			while (std::regex_search(line, matchData, keyphraseRegex)) {// TODO: This needs to be made more efficient and make sure you understand how the matches array is actually populated if not with all the possible matches.
+				std::cout.write(line.c_str(), matchData.position(0));
 				std::cout << color::red;
-				std::cout.write(line.c_str() + offset, matchData.length(i));
-				offset += matchData.length(i);
+				std::cout.write(line.c_str() + matchData.position(0), matchData.length(0));
 				std::cout << color::reset;
+				line = matchData.suffix();
 			}
-			size_t lineEndLen = line.length() - offset;
-			if (lineEndLen != 0) {
-				std::cout.write(line.c_str() + offset, lineEndLen);
-			}
-			std::cout << std::endl;
+			std::cout << line << std::endl;
 		}
-		else { std::cout << "wtf" << std::endl; }
+		else {
+			if (std::regex_search(line, matchData, keyphraseRegex)) {
+				std::cout << line << std::endl;
+			}
+		}
 	}
 	color::release();
 }
