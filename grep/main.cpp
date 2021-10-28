@@ -187,7 +187,7 @@ void manageArgs(int argc, char** argv) {
 		exit(EXIT_SUCCESS);
 	case 1:																		// If exactly 1 non-flag argument exists, go ahead with program.
 		{	// Unnamed namespace because without it one can't create variables inside switch cases.
-			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::nosubs | std::regex_constants::optimize;
+			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::optimize;
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
 			keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags);
 		}
