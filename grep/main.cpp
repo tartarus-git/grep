@@ -116,15 +116,6 @@ void releaseOutputStyling() {
 bool shouldLoopRun = true;
 void signalHandler(int signum) { shouldLoopRun = false; }						// Gets called on SIGINT.
 
-// NOTE: Setting shouldLoopRun does a good job of stopping the loop in theory, but if the program is in the middle of std::getline, which is blocking,
-// in theory nothing should happen until a line is received, which hinders the usage of Ctrl + C in the console a lot.
-// This can be overcome with a fair amount of effort, but the solution is very platform-specific and more inefficient than the current setup by a lot.
-// The inefficiency is due to the extra syscalls that you would have to do (you would have to do a syscall for each incoming character).
-// In practice, the current setup is completely fine because the terminal sends an EOF along with triggering SIGINT, which works out perfectly for us
-// because it ends whatever line is currently making std::getline block. The problem with this is that the terminal doesn't have to do it,
-// which means, depending on where you run this, it might not exit as smoothly. All the major terminal do this for us though and the original grep doesn't handle
-// this edge case either to my knowledge, so we should be fine.
-
 // Collection of flags. These correspond to command-line flags you can set for the program.
 namespace flags {
 	bool caseSensitive = false;
@@ -187,9 +178,15 @@ void manageArgs(int argc, char** argv) {
 		exit(EXIT_SUCCESS);
 	case 1:																		// If exactly 1 non-flag argument exists, go ahead with program.
 		{	// Unnamed namespace because without it one can't create variables inside switch cases.
-			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::optimize;
+			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::nosubs | std::regex_constants::optimize;
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
-			keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags);
+			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }
+			catch (const std::regex_error& err) {
+				initOutputStyling();
+				std::cout << format::error << "regex error: " << err.what() << format::endl;
+				releaseOutputStyling();
+				exit(EXIT_SUCCESS);
+			}
 		}
 		return;
 	default:																	// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
