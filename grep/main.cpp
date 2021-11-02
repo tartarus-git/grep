@@ -6,8 +6,10 @@
 #ifdef PLATFORM_WINDOWS
 #include <io.h>
 #define isatty(x) _isatty(x)
+#define posixRead(FileHandle, DstBuf, MaxCharCount) _read(FileHandle, DstBuf, MaxCharCount)
 #else
 #include <unistd.h>
+#define posixRead(fd, buf, count) read(fd, buf, count)
 #endif
 
 #include <csignal>
@@ -19,6 +21,8 @@
 #include <iostream>
 #include <string>
 #include <regex>
+
+#define STDIN_FILENO 0
 
 // ANSI escape code helpers.
 #define ANSI_ESC_CODE_PREFIX "\033["
@@ -197,8 +201,48 @@ void manageArgs(int argc, char** argv) {
 	}
 }
 
+class InputStream {
+#define BUFFER_SIZE 256
+	static char frontBuffer[BUFFER_SIZE];
+	static unsigned int readIndex;
+	static unsigned int streamReadIndex;
+
+public:
+	static void init() {
+		readIndex = 0;
+		streamReadIndex = 0;
+	}
+
+	static std::string readLine() {
+		if (readIndex != BUFFER_SIZE) {
+			int result = posixRead(STDIN_FILENO, frontBuffer, BUFFER_SIZE - readIndex);
+			readIndex += result;
+		}
+		std::string line;
+	thingthing:
+
+		bool foundNewline = false;
+		for (int i = streamReadIndex; i < readIndex; i++) {
+			if (frontBuffer[i] == '\n') { foundNewline = true; break; }
+			line += frontBuffer[i];
+		}
+		if (foundNewline) {
+			return line;
+		}
+		int result = posixRead(STDIN_FILENO, frontBuffer, BUFFER_SIZE);
+		readIndex = result;
+		streamReadIndex = 0;
+		goto thingthing;
+	}
+};
+
+char InputStream::frontBuffer[BUFFER_SIZE];
+unsigned int InputStream::readIndex;
+unsigned int InputStream::streamReadIndex;
+
 // Program entry point
 int main(int argc, char** argv) {
+	InputStream::init();
 	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
 											// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 
@@ -222,7 +266,7 @@ int main(int argc, char** argv) {
 	color::initRed();										// Initialize coloring. This is for highlighting matches.
 	color::initReset();
 	while (shouldLoopRun) {																	// Run loop until shouldLoopRun says its time to quit.
-		std::getline(std::cin, line);
+		line = InputStream::readLine();
 
 		if (isOutputColored) {																// Line output algorithm is different with colors because highlighting.
 			if (std::regex_search(line, matchData, keyphraseRegex)) {
