@@ -6,10 +6,10 @@
 #ifdef PLATFORM_WINDOWS
 #include <io.h>
 #define isatty(x) _isatty(x)
-#define posixRead(FileHandle, DstBuf, MaxCharCount) _read(FileHandle, DstBuf, MaxCharCount)
 #else
+#include <errno.h>
 #include <unistd.h>
-#define posixRead(fd, buf, count) read(fd, buf, count)
+#include <fcntl.h>
 #endif
 
 #include <csignal>
@@ -22,7 +22,9 @@
 #include <string>
 #include <regex>
 
+#ifdef PLATFORM_WINDOWS
 #define STDIN_FILENO 0
+#endif
 
 // ANSI escape code helpers.
 #define ANSI_ESC_CODE_PREFIX "\033["
@@ -203,42 +205,54 @@ void manageArgs(int argc, char** argv) {
 
 class InputStream {
 #define BUFFER_SIZE 256
-	static char frontBuffer[BUFFER_SIZE];
-	static unsigned int readIndex;
-	static unsigned int streamReadIndex;
+	static char buffer[BUFFER_SIZE];
+	static size_t eaten;
+	static size_t created;
 
 public:
+	static bool eof;
 	static void init() {
-		readIndex = 0;
-		streamReadIndex = 0;
+		int result = fcntl(STDIN_FILENO, F_GETFL);					// Read the prev data from the thing so I don't overwrite anything.
+		if (result == -1) {
+			std::cout << "failed to get file status flags data from stdin" << std::endl;
+			return;
+		}
+		std::cout << result << std::endl;
+		if (fcntl(STDIN_FILENO, F_SETFL, result | O_NONBLOCK) == -1) {
+			// TODO: Implement logic for when the async setup fails.
+			std::cout << "failed to set stdin to non-blocking in init()" << std::endl;
+		}
 	}
 
-	static std::string readLine() {
-		if (readIndex != BUFFER_SIZE) {
-			int result = posixRead(STDIN_FILENO, frontBuffer, BUFFER_SIZE - readIndex);
-			readIndex += result;
+	static bool readLine(std::string& buffer) {
+		while (true) {
+			for (eaten; eaten < created; eaten++) {
+				if (InputStream::buffer[eaten] == '\n') { eaten += 1; return 1; }
+				buffer += InputStream::buffer[eaten];
+			}
+			if (eaten == created) {
+				int bytesRead = read(STDIN_FILENO, InputStream::buffer, BUFFER_SIZE);
+				if (bytesRead == 0) {
+					eof = true;
+					return false;
+				}
+				if (bytesRead == -1) {
+					if (errno == EAGAIN) {
+						return false;
+					}
+					return false;
+				}
+				created = bytesRead;
+				eaten = 0;
+			}
 		}
-		std::string line;
-	thingthing:
-
-		bool foundNewline = false;
-		for (int i = streamReadIndex; i < readIndex; i++) {
-			if (frontBuffer[i] == '\n') { foundNewline = true; break; }
-			line += frontBuffer[i];
-		}
-		if (foundNewline) {
-			return line;
-		}
-		int result = posixRead(STDIN_FILENO, frontBuffer, BUFFER_SIZE);
-		readIndex = result;
-		streamReadIndex = 0;
-		goto thingthing;
 	}
 };
 
-char InputStream::frontBuffer[BUFFER_SIZE];
-unsigned int InputStream::readIndex;
-unsigned int InputStream::streamReadIndex;
+char InputStream::buffer[256];
+size_t InputStream::eaten = 0;
+size_t InputStream::created = 0;
+bool InputStream::eof = false;
 
 // Program entry point
 int main(int argc, char** argv) {
@@ -266,7 +280,14 @@ int main(int argc, char** argv) {
 	color::initRed();										// Initialize coloring. This is for highlighting matches.
 	color::initReset();
 	while (shouldLoopRun) {																	// Run loop until shouldLoopRun says its time to quit.
-		line = InputStream::readLine();
+		bool succeeded = InputStream::readLine(line);
+		if (!succeeded) {
+			if (InputStream::eof == true) {
+				break;
+			}
+			continue;
+		}
+
 
 		if (isOutputColored) {																// Line output algorithm is different with colors because highlighting.
 			if (std::regex_search(line, matchData, keyphraseRegex)) {
@@ -282,7 +303,6 @@ int main(int argc, char** argv) {
 			}
 		}
 		else { if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; } }	// Just output whole line for without colors.
-		if (std::cin.eof()) { break; }														// If last line ended with EOF, input is over, start ending.
 
 		line.clear();													// Clear the line buffer so we can use it again.
 	}
