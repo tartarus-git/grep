@@ -21,8 +21,8 @@
 #include <fcntl.h>																										// File control function used in InputStream to set console input to non-blocking.
 #endif
 
-#include <chrono>																										// For access to time spans for use with sleep_for.
-#include <thread>																										// For access to std::this_thread::yield() and std::this_thread::sleep_for()
+#include <chrono>																										// For access to time durations for use with sleep_for().
+#include <thread>																										// For access to std::this_thread::sleep_for() and std::this_thread::yield().
 
 #include <stdio.h>
 #ifdef PLATFORM_WINDOWS
@@ -333,8 +333,9 @@ int main(int argc, char** argv) {
 				break;
 #else
 				if (InputStream::eof) { break; }																								// EOF is signaled with InputStream::eof on Linux, so break out when that is encountered.
-				std::this_thread::sleep_for(std::chrono::milliseconds(1));																					// Sleep for 1 ms when there is nothing to read (theoretically only happens when user hesitates in console) so thread gets sent to the back of the paused queue. Makes room for all the other threads to run.
-				std::this_thread::yield();																									// After thread is active again, immediately yield to the back of the running queue so other threads have another chance to run. Theoretically counteracts thread being placed somewhere other than the end of the running queue after coming off of the paused queue.
+				// The below code theoretically only runs when the user is hesitating at the terminal, so it shouldn't negatively impact any piped operations or anything like that.
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));																		// Wait for 1 ms. Takes thread of running queue and pauses it, not only letting other processes take CPU time, but actively using nothing.
+				std::this_thread::yield();																										// Immediately yield after regaining control. If thread somehow doesn't get put at the back of running queue after sleep_for, this ensures it, which is good.
 				continue;																														// Line isn't complete, continue to build line.
 #endif
 			}
@@ -368,6 +369,7 @@ int main(int argc, char** argv) {
 			break;
 #else
 			if (InputStream::eof) { break; }
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			std::this_thread::yield();
 			continue;
 #endif
