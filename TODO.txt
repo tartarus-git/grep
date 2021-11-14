@@ -1,0 +1,5 @@
+TODO LIST:
+
+	- Comment the define in Visual Studio, make sure the new code you added in the last commit looks good there.
+	- Test if the dynamic buffer scales properly when exposed to large and to small test files.
+	- Make sure that the sleep_for code doesn't get hit when your piping input. It already shouldn't, just test it using a little bit of piping.

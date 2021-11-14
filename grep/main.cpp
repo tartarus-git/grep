@@ -36,6 +36,8 @@
 #define STDIN_FILENO 0
 #endif
 
+#define LOOP_SLEEP_DURATION 10
+
 // ANSI escape code helpers.
 #define ANSI_ESC_CODE_PREFIX "\033["
 #define ANSI_ESC_CODE_SUFFIX "m"
@@ -334,7 +336,7 @@ int main(int argc, char** argv) {
 #else
 				if (InputStream::eof) { break; }																								// EOF is signaled with InputStream::eof on Linux, so break out when that is encountered.
 				// The below code theoretically only runs when the user is hesitating at the terminal, so it shouldn't negatively impact any piped operations or anything like that.
-				std::this_thread::sleep_for(std::chrono::milliseconds(1));																		// Wait for 1 ms. Takes thread of running queue and pauses it, not only letting other processes take CPU time, but actively using nothing.
+				std::this_thread::sleep_for(std::chrono::milliseconds(LOOP_SLEEP_DURATION));																		// Wait for 1 ms. Takes thread of running queue and pauses it, not only letting other processes take CPU time, but actively using nothing.
 				std::this_thread::yield();																										// Immediately yield after regaining control. If thread somehow doesn't get put at the back of running queue after sleep_for, this ensures it, which is good.
 				continue;																														// Line isn't complete, continue to build line.
 #endif
@@ -369,7 +371,7 @@ int main(int argc, char** argv) {
 			break;
 #else
 			if (InputStream::eof) { break; }
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			std::this_thread::sleep_for(std::chrono::milliseconds(LOOP_SLEEP_DURATION));
 			std::this_thread::yield();
 			continue;
 #endif
