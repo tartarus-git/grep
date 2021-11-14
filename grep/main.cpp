@@ -43,10 +43,11 @@
 // Help text.
 const char* helpText = "grep accepts text as input and outputs the lines from the input that have the specified keyphrase in them\n" \
 					   "\n" \
-					   "usage: grep [-c] <search string>\n" \
+					   "usage: grep [-c] <regex keyphrase>\n" \
+					   "       grep <--help|--h>            -->            shows help text\n" \
 					   "\n" \
 					   "arguments:\n" \
-							"\t-c		-->			be case sensitive when matching";
+							"\t-c        -->        be case sensitive when matching";
 
 // Flag to keep track of whether we should color output or not. Can also be used for testing if output is a TTY or not.
 bool isOutputColored;
