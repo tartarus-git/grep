@@ -21,7 +21,8 @@
 #include <fcntl.h>																										// File control function used in InputStream to set console input to non-blocking.
 #endif
 
-#include <thread>																										// For access to std::this_thread::yield().
+#include <chrono>																										// For access to time spans for use with sleep_for.
+#include <thread>																										// For access to std::this_thread::yield() and std::this_thread::sleep_for()
 
 #include <stdio.h>
 #ifdef PLATFORM_WINDOWS
@@ -332,7 +333,8 @@ int main(int argc, char** argv) {
 				break;
 #else
 				if (InputStream::eof) { break; }																								// EOF is signaled with InputStream::eof on Linux, so break out when that is encountered.
-				std::this_thread::yield();																										// Give all other same-priority threads precedence over this one so we don't slow down the system.
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));																					// Sleep for 1 ms when there is nothing to read (theoretically only happens when user hesitates in console) so thread gets sent to the back of the paused queue. Makes room for all the other threads to run.
+				std::this_thread::yield();																									// After thread is active again, immediately yield to the back of the running queue so other threads have another chance to run. Theoretically counteracts thread being placed somewhere other than the end of the running queue after coming off of the paused queue.
 				continue;																														// Line isn't complete, continue to build line.
 #endif
 			}
