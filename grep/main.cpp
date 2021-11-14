@@ -1,7 +1,16 @@
+// Memory usage.
+#define INPUT_STREAM_BUFFER_MAX_SIZE 1024 * 1024									// The maximum size to resize the stream buffer to. This prevents endless amounts of RAM from being used.
+#define INPUT_STREAM_BUFFER_START_SIZE 256										// The starting size for the stream buffer.
+#define INPUT_STREAM_BUFFER_SIZE_STEP 256										// How much more memory to reallocate with if the bounds of the previous memory were hit.
+
+#include <csignal>
+
 #ifdef PLATFORM_WINDOWS
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #endif
+
+#include <cstdlib>
 
 #ifdef PLATFORM_WINDOWS
 #include <io.h>
@@ -12,7 +21,7 @@
 #include <fcntl.h>
 #endif
 
-#include <csignal>
+#include <thread>
 
 #include <stdio.h>
 #ifdef PLATFORM_WINDOWS
@@ -204,59 +213,69 @@ void manageArgs(int argc, char** argv) {
 }
 
 class InputStream {
-#define BUFFER_SIZE 256
-	static char buffer[BUFFER_SIZE];
-	static size_t eaten;
-	static size_t created;
+	static char* buffer;
+	static size_t bufferSize;
+
+	static ssize_t bytesRead;
+	static ssize_t bytesReceived;
 
 public:
 	static bool eof;
+
 	static void init() {
-		int result = fcntl(STDIN_FILENO, F_GETFL);					// Read the prev data from the thing so I don't overwrite anything.
-		if (result == -1) {
-			std::cout << "failed to get file status flags data from stdin" << std::endl;
-			return;
-		}
-		std::cout << result << std::endl;
-		if (fcntl(STDIN_FILENO, F_SETFL, result | O_NONBLOCK) == -1) {
-			// TODO: Implement logic for when the async setup fails.
-			std::cout << "failed to set stdin to non-blocking in init()" << std::endl;
+#ifndef PLATFORM_WINDOWS
+		int result = fcntl(STDIN_FILENO, F_GETFL);												// Set stdin file to non-blocking.
+		if (result == -1) { return; }														// If can't get necessary data through fcntl, return and just settle for blocking.
+		if (fcntl(STDIN_FILENO, F_SETFL, result | O_NONBLOCK) == -1) { return; }								// If can't set necessary data through fcntl, return and just settle for blocking.
+#endif
+
+		buffer = new char[bufferSize];														// Initialize buffer with the starting amount of RAM space.
+	}
+
+	static bool readLine(std::string& line) {
+		while (true) {
+			for (; bytesRead < bytesReceived; bytesRead++) {
+				char character = buffer[bytesRead];
+				if (character == '\n') { bytesRead += 1; return true; }
+				line += character;
+			}
+
+			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);
+			if (bytesReceived == 0) { eof = true; delete[] buffer; return false; }
+			if (bytesReceived == -1) {
+				if (errno == EAGAIN) { return false; }
+				format::initError();																	// Assumes the colors are already set up for it because this can only be triggered inside the main loop.
+				format::initEndl();
+				std::cout << format::error << "failed to read from stdin" << format::endl;
+				format::release();
+				eof = true;
+				delete[] buffer;
+				return false;
+
+			}
+			bytesRead = 0;
+
+			if (bytesReceived == bufferSize) {													// Make buffer bigger if it is filled with one read syscall.
+				size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
+				char* newBuffer = (char*)realloc(buffer, newBufferSize);
+				if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
+			}
 		}
 	}
 
-	static bool readLine(std::string& buffer) {
-		while (true) {
-			for (eaten; eaten < created; eaten++) {
-				if (InputStream::buffer[eaten] == '\n') { eaten += 1; return 1; }
-				buffer += InputStream::buffer[eaten];
-			}
-			if (eaten == created) {
-				int bytesRead = read(STDIN_FILENO, InputStream::buffer, BUFFER_SIZE);
-				if (bytesRead == 0) {
-					eof = true;
-					return false;
-				}
-				if (bytesRead == -1) {
-					if (errno == EAGAIN) {
-						return false;
-					}
-					return false;
-				}
-				created = bytesRead;
-				eaten = 0;
-			}
-		}
-	}
+	static void release() { delete[] buffer; }
 };
 
-char InputStream::buffer[256];
-size_t InputStream::eaten = 0;
-size_t InputStream::created = 0;
+char* InputStream::buffer;
+size_t InputStream::bufferSize = INPUT_STREAM_BUFFER_START_SIZE;
+
+ssize_t InputStream::bytesRead = 0;
+ssize_t InputStream::bytesReceived = 0;
+
 bool InputStream::eof = false;
 
 // Program entry point
 int main(int argc, char** argv) {
-	InputStream::init();
 	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
 											// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 
@@ -275,6 +294,8 @@ int main(int argc, char** argv) {
 
 	manageArgs(argc, argv);									// Manage the arguments so that we don't have to worry about it here.
 
+	InputStream::init();
+
 	std::string line;										// Storage for the current line that the algorithm is working on.
 	std::smatch matchData;									// Storage for regex match data, which we use to color matches.
 	color::initRed();										// Initialize coloring. This is for highlighting matches.
@@ -285,9 +306,9 @@ int main(int argc, char** argv) {
 			if (InputStream::eof == true) {
 				break;
 			}
+			std::this_thread::yield();
 			continue;
 		}
-
 
 		if (isOutputColored) {																// Line output algorithm is different with colors because highlighting.
 			if (std::regex_search(line, matchData, keyphraseRegex)) {
