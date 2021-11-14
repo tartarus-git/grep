@@ -1,37 +1,37 @@
 // Memory usage.
-#define INPUT_STREAM_BUFFER_MAX_SIZE 1024 * 1024									// The maximum size to resize the stream buffer to. This prevents endless amounts of RAM from being used.
-#define INPUT_STREAM_BUFFER_START_SIZE 256										// The starting size for the stream buffer.
-#define INPUT_STREAM_BUFFER_SIZE_STEP 256										// How much more memory to reallocate with if the bounds of the previous memory were hit.
+#define INPUT_STREAM_BUFFER_MAX_SIZE 1024 * 1024																		// The maximum size to resize the stream buffer to. This prevents endless amounts of RAM from being used.
+#define INPUT_STREAM_BUFFER_START_SIZE 256																				// The starting size for the stream buffer.
+#define INPUT_STREAM_BUFFER_SIZE_STEP 256																				// How much more memory to reallocate with if the bounds of the previous memory were hit.
 
 #include <csignal>
 
 #ifdef PLATFORM_WINDOWS
-#define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN																								// Include Windows.h to get access to the few winapi functions that we need, such as the ones for getting console input handle and setting ANSI escape code support.
 #include <Windows.h>
 #endif
 
-#include <cstdlib>
+#include <cstdlib>																										// Needed for realloc function.
 
 #ifdef PLATFORM_WINDOWS
-#include <io.h>
-#define isatty(x) _isatty(x)
+#include <io.h>																											// Needed for _isatty function.
+#define isatty(x) _isatty(x)																							// Renaming _isatty to isatty so it's the same as the function call in Linux.
 #else
-#include <errno.h>
-#include <unistd.h>
-#include <fcntl.h>
+#include <errno.h>																										// Gives us access to errno global variable for reading errors from certain functions.
+#include <unistd.h>																										// Linux isatty function is in here as well as some other useful stuff for this program as well I think.
+#include <fcntl.h>																										// File control function used in InputStream to set console input to non-blocking.
 #endif
 
-#include <thread>
+#include <thread>																										// For access to std::this_thread::yield().
 
 #include <stdio.h>
 #ifdef PLATFORM_WINDOWS
-#define fileno(x) _fileno(x)
+#define fileno(x) _fileno(x)																							// Renaming for compatibility with the Linux version of the function call.
 #endif
 #include <iostream>
 #include <string>
 #include <regex>
 
-#ifdef PLATFORM_WINDOWS
+#ifdef PLATFORM_WINDOWS																									// This define is already defined in one of the Linux-only headers, but for Windows, we need to explicitly do it.
 #define STDIN_FILENO 0
 #endif
 
@@ -54,25 +54,31 @@ bool isOutputColored;
 // Output coloring.
 namespace color {
 	char* red;
-	void initRed() {
-		if (isOutputColored) {
-			red = new char[ANSI_ESC_CODE_MIN_SIZE + 2 + 1];
-			memcpy(red, ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 2 + 1);
-			return;
-		}
+	void unsafeInitRed() {
+		red = new char[ANSI_ESC_CODE_MIN_SIZE + 2 + 1];
+		memcpy(red, ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 2 + 1);
+	}
+	void unsafeInitPipedRed() {
 		red = new char;
 		*red = '\0';
 	}
+	void initRed() {
+		if (isOutputColored) { unsafeInitRed(); return; }
+		unsafeInitPipedRed();
+	}
 
 	char* reset;
-	void initReset() {
-		if (isOutputColored) {
-			reset = new char[ANSI_ESC_CODE_MIN_SIZE + 1 + 1];
-			memcpy(reset, ANSI_ESC_CODE_PREFIX "0" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 1 + 1);
-			return;
-		}
+	void unsafeInitReset() {
+		reset = new char[ANSI_ESC_CODE_MIN_SIZE + 1 + 1];
+		memcpy(reset, ANSI_ESC_CODE_PREFIX "0" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 1 + 1);
+	}
+	void unsafeInitPipedReset() {
 		reset = new char;
 		*reset = '\0';
+	}
+	void initReset() {
+		if (isOutputColored) { unsafeInitReset(); return; }
+		unsafeInitPipedReset();
 	}
 
 	void release() {
@@ -129,7 +135,7 @@ void releaseOutputStyling() {
 
 // Flag so the main loop knows when to quit because of a SIGINT.
 bool shouldLoopRun = true;
-void signalHandler(int signum) { shouldLoopRun = false; }						// Gets called on SIGINT.
+void signalHandler(int signum) { shouldLoopRun = false; }																		// Gets called on SIGINT.
 
 // Collection of flags. These correspond to command-line flags you can set for the program.
 namespace flags {
@@ -195,8 +201,8 @@ void manageArgs(int argc, char** argv) {
 		{	// Unnamed namespace because without it one can't create variables inside switch cases.
 			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::nosubs | std::regex_constants::optimize;
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
-			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }
-			catch (const std::regex_error& err) {
+			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }									// Parse regex keyphrase.
+			catch (const std::regex_error& err) {																		// Catch any errors relating to keyphrase regex syntax and report them.
 				initOutputStyling();
 				std::cout << format::error << "regex error: " << err.what() << format::endl;
 				releaseOutputStyling();
@@ -213,6 +219,11 @@ void manageArgs(int argc, char** argv) {
 }
 
 class InputStream {
+#ifdef PLATFORM_WINDOWS
+public:
+
+	static void init() { }
+#else
 	static char* buffer;
 	static size_t bufferSize;
 
@@ -223,49 +234,58 @@ public:
 	static bool eof;
 
 	static void init() {
-#ifndef PLATFORM_WINDOWS
-		int result = fcntl(STDIN_FILENO, F_GETFL);												// Set stdin file to non-blocking.
-		if (result == -1) { return; }														// If can't get necessary data through fcntl, return and just settle for blocking.
-		if (fcntl(STDIN_FILENO, F_SETFL, result | O_NONBLOCK) == -1) { return; }								// If can't set necessary data through fcntl, return and just settle for blocking.
+		int result = fcntl(STDIN_FILENO, F_GETFL);																			// This code block sets file operations on the stdin file to non-blocking.
+		if (result == -1) { return; }																						// If can't get necessary data through fcntl, return and just settle for blocking.
+		if (fcntl(STDIN_FILENO, F_SETFL, result | O_NONBLOCK) == -1) { return; }											// If can't set necessary data through fcntl, return and just settle for blocking.
+
+		buffer = new char[bufferSize];																						// Initialize buffer with the starting amount of RAM space.
+	}
 #endif
 
-		buffer = new char[bufferSize];														// Initialize buffer with the starting amount of RAM space.
-	}
-
-	static bool readLine(std::string& line) {
+	static bool readLine(std::string& line) {																				// Returns false if no error, true if EOF or nothing to read. EOF is signaled by eof member variable in Linux. In Windows nothing to read state doesn't exist.
+#ifdef PLATFORM_WINDOWS
+		if (std::cin.eof()) { return true; }
+		std::getline(std::cin, line);
+		return false;
+#else
 		while (true) {
-			for (; bytesRead < bytesReceived; bytesRead++) {
+			for (; bytesRead < bytesReceived; bytesRead++) {																// Try reading as much as possible from buffer.
 				char character = buffer[bytesRead];
-				if (character == '\n') { bytesRead += 1; return true; }
+				if (character == '\n') { bytesRead += 1; return false; }
 				line += character;
 			}
 
-			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);
-			if (bytesReceived == 0) { eof = true; delete[] buffer; return false; }
-			if (bytesReceived == -1) {
-				if (errno == EAGAIN) { return false; }
-				format::initError();																	// Assumes the colors are already set up for it because this can only be triggered inside the main loop.
+			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);															// If buffer is drained, read more data into buffer.
+			if (bytesReceived == 0) { eof = true; return true; }															// EOF
+			if (bytesReceived == -1) {																						// Either nonblocking nothing to read or error, which is also reported to caller as EOF.
+				if (errno == EAGAIN) { return true; }
+				format::initError();																						// Assumes the colors are already set up because this is only triggered inside the main loop.
 				format::initEndl();
 				std::cout << format::error << "failed to read from stdin" << format::endl;
 				format::release();
 				eof = true;
-				delete[] buffer;
-				return false;
+				return true;
 
 			}
 			bytesRead = 0;
 
-			if (bytesReceived == bufferSize) {													// Make buffer bigger if it is filled with one read syscall.
+			if (bytesReceived == bufferSize) {																				// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
 				size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
 				char* newBuffer = (char*)realloc(buffer, newBufferSize);
 				if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
 			}
 		}
+#endif
 	}
 
+#ifdef PLATFORM_WINDOWS
+	static void release() { }
+#else
 	static void release() { delete[] buffer; }
+#endif
 };
 
+#ifndef PLATFORM_WINDOWS																														// Static members variables only need to be initialized in Linux because we don't have any in Windows.
 char* InputStream::buffer;
 size_t InputStream::bufferSize = INPUT_STREAM_BUFFER_START_SIZE;
 
@@ -273,15 +293,16 @@ ssize_t InputStream::bytesRead = 0;
 ssize_t InputStream::bytesReceived = 0;
 
 bool InputStream::eof = false;
+#endif
 
 // Program entry point
 int main(int argc, char** argv) {
-	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
-											// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
+	signal(SIGINT, signalHandler);																												// Handling error here doesn't do any good because program should continue to operate regardless.
+																																				// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 
 	// Only enable colors if stdout is a TTY to make reading piped output easier for other programs.
 	if (isatty(fileno(stdout))) {
-#ifdef PLATFORM_WINDOWS			// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
+#ifdef PLATFORM_WINDOWS																															// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
 		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
 		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }
 		DWORD mode;
@@ -292,26 +313,30 @@ int main(int argc, char** argv) {
 	}
 	else { isOutputColored = false; }
 
-	manageArgs(argc, argv);									// Manage the arguments so that we don't have to worry about it here.
+	manageArgs(argc, argv);																														// Manage the arguments so that we don't have to worry about it here.
 
-	InputStream::init();
+	InputStream::init();																														// Initialize input streaming. Doesn't do anything on windows.
 
-	std::string line;										// Storage for the current line that the algorithm is working on.
-	std::smatch matchData;									// Storage for regex match data, which we use to color matches.
-	color::initRed();										// Initialize coloring. This is for highlighting matches.
-	color::initReset();
-	while (shouldLoopRun) {																	// Run loop until shouldLoopRun says its time to quit.
-		bool succeeded = InputStream::readLine(line);
-		if (!succeeded) {
-			if (InputStream::eof == true) {
+	std::string line;																															// Storage for the current line that the algorithm is working on.
+	std::smatch matchData;																														// Storage for regex match data, which we use to color matches.
+
+	// Branch based on if the output is colored or not. This is so that we don't check it over and over again inside the loop, which is terrible.
+	if (isOutputColored) {																														// If output is colored, activate colors and do the more complex matching algorithm
+		color::unsafeInitRed();
+		color::unsafeInitReset();
+
+		while (shouldLoopRun) {
+			if (InputStream::readLine(line)) {
+#ifdef PLATFORM_WINDOWS																															// InputStream::readLine is blocking on windows, so EOF is signaled with a true return, so break out here.
 				break;
+#else
+				if (InputStream::eof) { break; }																								// EOF is signaled with InputStream::eof on Linux, so break out when that is encountered.
+				std::this_thread::yield();																										// Give all other same-priority threads precedence over this one so we don't slow down the system.
+				continue;																														// Line isn't complete, continue to build line.
+#endif
 			}
-			std::this_thread::yield();
-			continue;
-		}
 
-		if (isOutputColored) {																// Line output algorithm is different with colors because highlighting.
-			if (std::regex_search(line, matchData, keyphraseRegex)) {
+			if (std::regex_search(line, matchData, keyphraseRegex)) {																			// Highlighted regex search algorithm.
 				do {
 					ptrdiff_t matchPosition = matchData.position();
 					std::cout.write(line.c_str(), matchPosition);
@@ -320,12 +345,36 @@ int main(int argc, char** argv) {
 					std::cout << color::reset;
 					line = matchData.suffix();
 				} while (std::regex_search(line, matchData, keyphraseRegex));
-				std::cout << line << std::endl;			// Print the rest of the line, where no match was found. The std::endl is important here.
+				std::cout << line << std::endl;																									// Print the rest of the line, where no match was found. The std::endl is important here.
 			}
-		}
-		else { if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; } }	// Just output whole line for without colors.
 
-		line.clear();													// Clear the line buffer so we can use it again.
+			line.clear();																														// Clear line buffer so we can use it again.
+		}
+
+		color::release();
+		InputStream::release();																													// This doesn't do anything on Windows.
+		return EXIT_SUCCESS;
 	}
-	color::release();													// Only release the colors if we've gotten to this point, because that's all we used.
+
+	color::unsafeInitPipedRed();																												// If output isn't colored, don't activate colors and do the simple matching algorithm.
+	color::unsafeInitPipedReset();
+
+	while (shouldLoopRun) {
+		if (InputStream::readLine(line)) {
+#ifdef PLATFORM_WINDOWS
+			break;
+#else
+			if (InputStream::eof) { break; }
+			std::this_thread::yield();
+			continue;
+#endif
+		}
+
+		if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; }												// Print lines that match the regex.
+
+		line.clear();
+	}
+
+	color::release();
+	InputStream::release();
 }
