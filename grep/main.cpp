@@ -4,6 +4,7 @@
 #define INPUT_STREAM_BUFFER_SIZE_STEP 256																				// How much more memory to reallocate with if the bounds of the previous memory were hit.
 
 #include <csignal>
+#include <poll.h>
 
 #ifdef PLATFORM_WINDOWS
 #define WIN32_LEAN_AND_MEAN																								// Include Windows.h to get access to the few winapi functions that we need, such as the ones for getting console input handle and setting ANSI escape code support.
@@ -228,6 +229,9 @@ public:
 
 	static void init() { }
 #else
+	static pollfd fds;
+	static sigset_t sigmask;
+
 	static char* buffer;
 	static size_t bufferSize;
 
@@ -243,6 +247,9 @@ public:
 		if (fcntl(STDIN_FILENO, F_SETFL, result | O_NONBLOCK) == -1) { return; }											// If can't set necessary data through fcntl, return and just settle for blocking.
 
 		buffer = new char[bufferSize];																						// Initialize buffer with the starting amount of RAM space.
+
+		sigemptyset(&sigmask);
+		std::cout << sigaddset(&sigmask, SIGINT) << std::endl;
 	}
 #endif
 
@@ -257,6 +264,22 @@ public:
 				char character = buffer[bytesRead];
 				if (character == '\n') { bytesRead += 1; return false; }
 				line += character;
+			}
+
+			int result = ppoll(&fds, 1, nullptr, &sigmask);
+			if (result < 0) {
+				if (errno == EINTR) {
+					std::cout << "signal hit" << std::endl;
+					eof = true;
+					return true;
+				}
+			}
+			if (result > 0) { }
+			std::cout << (const char*)&sigmask << std::endl;
+			if (!sigismember(&sigmask, SIGINT)) {
+				std::cout << "sigint captured" << std::endl;
+				eof = true;
+				return true;
 			}
 
 			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);															// If buffer is drained, read more data into buffer.
@@ -297,11 +320,14 @@ ssize_t InputStream::bytesRead = 0;
 ssize_t InputStream::bytesReceived = 0;
 
 bool InputStream::eof = false;
+
+pollfd InputStream::fds = { STDIN_FILENO, POLLIN, 0 };
+sigset_t InputStream::sigmask;
 #endif
 
 // Program entry point
 int main(int argc, char** argv) {
-	signal(SIGINT, signalHandler);																												// Handling error here doesn't do any good because program should continue to operate regardless.
+	//signal(SIGINT, signalHandler);																												// Handling error here doesn't do any good because program should continue to operate regardless.
 																																				// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 
 	// Only enable colors if stdout is a TTY to make reading piped output easier for other programs.
