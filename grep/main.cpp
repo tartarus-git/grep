@@ -4,6 +4,7 @@
 #define INPUT_STREAM_BUFFER_SIZE_STEP 256																				// How much more memory to reallocate with if the bounds of the previous memory were hit.
 
 #include <csignal>
+#include <sys/signalfd.h>
 #include <poll.h>
 
 #ifdef PLATFORM_WINDOWS
@@ -229,8 +230,9 @@ public:
 
 	static void init() { }
 #else
-	static pollfd fds;
-	static sigset_t sigmask;
+	static bool isInputTTY;
+	static pollfd fds[2];				// File descriptors to poll. One for stdin and one for a signal fd.
+	static sigset_t sigmask;			// Signals to handle with poll.
 
 	static char* buffer;
 	static size_t bufferSize;
@@ -242,14 +244,33 @@ public:
 	static bool eof;
 
 	static void init() {
-		int result = fcntl(STDIN_FILENO, F_GETFL);																			// This code block sets file operations on the stdin file to non-blocking.
-		if (result == -1) { return; }																						// If can't get necessary data through fcntl, return and just settle for blocking.
-		if (fcntl(STDIN_FILENO, F_SETFL, result | O_NONBLOCK) == -1) { return; }											// If can't set necessary data through fcntl, return and just settle for blocking.
+		if (isatty(STDIN_FILENO)) {
+
+		// Add SIGINT to set of tracked signals.
+		sigemptyset(&sigmask);
+		sigaddset(&sigmask, SIGINT);
+
+		// Block the set of tracked signals from being tracked by default because obviously we're tracking them.
+		sigprocmask(SIG_BLOCK, &sigmask, nullptr);
+
+		// Create new file descriptor. Makes a read available when one of the signals in sigmask is caught.
+		int sigfd = signalfd(-1, &sigmask, 0);
+
+		fds[1].fd = sigfd;				// Add sigfd to list of to be polled file descriptors, so we can be notified if we get a signal from poll.
+		isInputTTY = true;
+
+		std::cout << "took the tty path with polling." << std::endl;
+		} else {
+
+		isInputTTY = false;
+
+		std::cout << "took the non-tty path with event handler" << std::endl;
+
+		// If input isn't TTY, a simple signal handler event callback will do.
+		signal(SIGINT, signalHandler);
+		}
 
 		buffer = new char[bufferSize];																						// Initialize buffer with the starting amount of RAM space.
-
-		sigemptyset(&sigmask);
-		std::cout << sigaddset(&sigmask, SIGINT) << std::endl;
 	}
 #endif
 
@@ -259,6 +280,7 @@ public:
 		std::getline(std::cin, line);
 		return false;
 #else
+		// TODO: Maybe try checking the isLoopRunning or whatever variable more often, as in in more loops. What if a line is super long when piping and the sigint takes forever to take effect, that would suck.
 		while (true) {
 			for (; bytesRead < bytesReceived; bytesRead++) {																// Try reading as much as possible from buffer.
 				char character = buffer[bytesRead];
@@ -266,26 +288,25 @@ public:
 				line += character;
 			}
 
-			int result = ppoll(&fds, 1, nullptr, &sigmask);
-			if (result < 0) {
-				if (errno == EINTR) {
-					std::cout << "signal hit" << std::endl;
-					eof = true;
-					return true;
-				}
-			}
-			if (result > 0) { }
-			std::cout << (const char*)&sigmask << std::endl;
-			if (!sigismember(&sigmask, SIGINT)) {
-				std::cout << "sigint captured" << std::endl;
+
+			if (isInputTTY) {			// Only poll if input is TTY, if input isn't TTY we can avoid the extra syscall.
+			int result = poll(fds, 2, -1);			// Block until we either get some input on stdin or get a SIGINT.
+
+			if (fds[1].revents) {
+				std::cout << "SIGINT caught, sending EOF to rest of program, thereby terminating..." << std::endl;
 				eof = true;
 				return true;
 			}
+			}
 
 			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);															// If buffer is drained, read more data into buffer.
-			if (bytesReceived == 0) { eof = true; return true; }															// EOF
+
+			if (bytesReceived == 0) {
+				// This is in the case of an EOF.
+				eof = true;
+				return true;
+			}
 			if (bytesReceived == -1) {																						// Either nonblocking nothing to read or error, which is also reported to caller as EOF.
-				if (errno == EAGAIN) { return true; }
 				format::initError();																						// Assumes the colors are already set up because this is only triggered inside the main loop.
 				format::initEndl();
 				std::cout << format::error << "failed to read from stdin" << format::endl;
@@ -321,8 +342,10 @@ ssize_t InputStream::bytesReceived = 0;
 
 bool InputStream::eof = false;
 
-pollfd InputStream::fds = { STDIN_FILENO, POLLIN, 0 };
+pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };
 sigset_t InputStream::sigmask;
+
+bool InputStream::isInputTTY;
 #endif
 
 // Program entry point
@@ -331,7 +354,7 @@ int main(int argc, char** argv) {
 																																				// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 
 	// Only enable colors if stdout is a TTY to make reading piped output easier for other programs.
-	if (isatty(fileno(stdout))) {
+	if (isatty(fileno(stdout))) {				// TODO: fileno is useless here is it not? Just use STDIN_FILENO define.
 #ifdef PLATFORM_WINDOWS																															// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
 		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
 		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }
