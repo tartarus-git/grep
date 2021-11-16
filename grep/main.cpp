@@ -297,7 +297,6 @@ errorBranch:	fds[1].fd = -1;					// Tell poll to ignore this entry in the fds ar
 				size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
 				char* newBuffer = (char*)realloc(buffer, newBufferSize);
 				if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
-				std::cout << "buffer resized, new size: " << bufferSize << std::endl;
 			}
 		}
 #endif
@@ -395,6 +394,5 @@ int main(int argc, char** argv) {
 releaseAndExit:
 	color::release();
 	InputStream::release();										// This doesn't do anything on Windows.
-	std::cout << "exiting grep..." << std::endl;
 	return EXIT_SUCCESS;
 }
