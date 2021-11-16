@@ -396,3 +396,17 @@ releaseAndExit:
 	InputStream::release();										// This doesn't do anything on Windows.
 	return EXIT_SUCCESS;
 }
+
+/*
+
+NOTE:
+
+The Windows implementation relies on EOF being sent on SIGINT, but still uses the shouldLoopRun variable in case things don't go as planned, in order to still be able to exit eventually.
+The problem with this approach is that in pipes where the first program doesn't listen to SIGINT and doesn't signal EOF to this grep program, this grep program wants to exit, but doesn't get to until a line is sent to it's stdin.
+This problem doesn't exist in the Linux version because we intercept SIGINT in grep through polling a sig fd, which makes it instant, regardless of if data is available on stdin or not.
+In order to do this in the Windows version (where such nice things as signalfd don't exist to my knowledge), I would need to do a whole lot of research and potentially some weird stuff.
+Honestly, I'm too lazy for that right now and we're talking about something that, in all likelyhood, will never become a problem.
+If it does become a problem, I'll just use the Windows findstr for that case.
+For now, I'm just going to leave it like this.
+
+*/
