@@ -139,9 +139,11 @@ void releaseOutputStyling() {
 	color::release();
 }
 
+#ifdef PLATFORM_WINDOWS
 // Flag so the main loop knows when to quit because of a SIGINT.
 bool shouldLoopRun = true;
 void signalHandler(int signum) { shouldLoopRun = false; }																		// Gets called on SIGINT.
+#endif
 
 // Collection of flags. These correspond to command-line flags you can set for the program.
 namespace flags {
@@ -224,63 +226,54 @@ void manageArgs(int argc, char** argv) {
 	}
 }
 
+// Handles input in a buffered way, also accounts for SIGINT while reading and reacts by signalling EOF.
 class InputStream {
-#ifdef PLATFORM_WINDOWS
+#ifdef PLATFORM_WINDOWS					// We don't do any special signal handling or custom buffering on Windows. No need for member variables.
 public:
 
 	static void init() { }
 #else
-	static bool isInputTTY;
 	static pollfd fds[2];				// File descriptors to poll. One for stdin and one for a signal fd.
 	static sigset_t sigmask;			// Signals to handle with poll.
 
 	static char* buffer;
 	static size_t bufferSize;
 
-	static ssize_t bytesRead;
-	static ssize_t bytesReceived;
+	static ssize_t bytesRead;			// Position of read head in buffer.
+	static ssize_t bytesReceived;			// Position of write head in buffer.
 
 public:
-	static bool eof;
+	static bool eof;				// True if EOF is encountered or if SIGINT is encountered.
 
 	static void init() {
-		if (isatty(STDIN_FILENO)) {
-
+		buffer = new char[bufferSize];						// Initialize buffer with the starting amount of RAM space.
+		
 		// Add SIGINT to set of tracked signals.
-		sigemptyset(&sigmask);
-		sigaddset(&sigmask, SIGINT);
+		if (sigemptyset(&sigmask) == -1) { goto errorBranch; }
+		if (sigaddset(&sigmask, SIGINT) == -1) { goto errorBranch; }
 
 		// Block the set of tracked signals from being tracked by default because obviously we're tracking them.
-		sigprocmask(SIG_BLOCK, &sigmask, nullptr);
+		if (sigprocmask(SIG_BLOCK, &sigmask, nullptr) == -1) { goto errorBranch; }
 
-		// Create new file descriptor. Makes a read available when one of the signals in sigmask is caught.
-		int sigfd = signalfd(-1, &sigmask, 0);
+		// Create new file descriptor. Makes a read available when one of the tracked signals is caught.
+		{
+			int sigfd = signalfd(-1, &sigmask, 0);
+			if (sigfd == -1) { goto errorBranch; }
 
-		fds[1].fd = sigfd;				// Add sigfd to list of to be polled file descriptors, so we can be notified if we get a signal from poll.
-		isInputTTY = true;
-
-		std::cout << "took the tty path with polling." << std::endl;
-		} else {
-
-		isInputTTY = false;
-
-		std::cout << "took the non-tty path with event handler" << std::endl;
-
-		// If input isn't TTY, a simple signal handler event callback will do.
-		signal(SIGINT, signalHandler);
+			fds[1].fd = sigfd;				// Add sigfd to list of to be polled file descriptors, so we can be notified if we get a signal from poll.
+			return;
 		}
 
-		buffer = new char[bufferSize];																						// Initialize buffer with the starting amount of RAM space.
+errorBranch:	fds[1].fd = -1;					// Tell poll to ignore this entry in the fds array.
 	}
 #endif
 
-	static bool readLine(std::string& line) {																				// Returns false if no error, true if EOF or nothing to read. EOF is signaled by eof member variable in Linux. In Windows nothing to read state doesn't exist.
+	static bool readLine(std::string& line) {	// Returns false if no error, true if EOF or nothing to read. EOF is signaled by eof member variable in Linux. In Windows nothing to read state doesn't exist.
 #ifdef PLATFORM_WINDOWS
 		if (std::cin.eof()) { return true; }
 		std::getline(std::cin, line);
 		return false;
 #else
-		// TODO: Maybe try checking the isLoopRunning or whatever variable more often, as in in more loops. What if a line is super long when piping and the sigint takes forever to take effect, that would suck.
 		while (true) {
 			for (; bytesRead < bytesReceived; bytesRead++) {																// Try reading as much as possible from buffer.
 				char character = buffer[bytesRead];
@@ -289,25 +282,15 @@ public:
 			}
 
 
-			if (isInputTTY) {			// Only poll if input is TTY, if input isn't TTY we can avoid the extra syscall.
 			int result = poll(fds, 2, -1);			// Block until we either get some input on stdin or get a SIGINT.
 
-			if (fds[1].revents) {
-				std::cout << "SIGINT caught, sending EOF to rest of program, thereby terminating..." << std::endl;
-				eof = true;
-				return true;
-			}
-			}
+			if (fds[1].revents) { eof = true; return true; }		// Signal EOF if we got a SIGINT.
 
-			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);															// If buffer is drained, read more data into buffer.
+			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);		// If input available on stdin, read as much as we can fit into the buffer.
 
-			if (bytesReceived == 0) {
-				// This is in the case of an EOF.
-				eof = true;
-				return true;
-			}
-			if (bytesReceived == -1) {																						// Either nonblocking nothing to read or error, which is also reported to caller as EOF.
-				format::initError();																						// Assumes the colors are already set up because this is only triggered inside the main loop.
+			if (bytesReceived == 0) { eof = true; return true; }		// In case of actual EOF, signal EOF.
+			if (bytesReceived == -1) {					// In case of error, log and signal EOF for graceful exit of calling code.
+				format::initError();					// Assumes the colors are already set up because this is only triggered inside the main loop.
 				format::initEndl();
 				std::cout << format::error << "failed to read from stdin" << format::endl;
 				format::release();
@@ -315,9 +298,9 @@ public:
 				return true;
 
 			}
-			bytesRead = 0;
+			bytesRead = 0;							// If new data is read, the read head needs to be reset to the beginning of the buffer.
 
-			if (bytesReceived == bufferSize) {																				// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
+			if (bytesReceived == bufferSize) {	// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
 				size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
 				char* newBuffer = (char*)realloc(buffer, newBufferSize);
 				if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
@@ -342,20 +325,21 @@ ssize_t InputStream::bytesReceived = 0;
 
 bool InputStream::eof = false;
 
-pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };
+pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };			// Parts of this data get changed later in runtime.
 sigset_t InputStream::sigmask;
-
-bool InputStream::isInputTTY;
 #endif
 
 // Program entry point
 int main(int argc, char** argv) {
-	//signal(SIGINT, signalHandler);																												// Handling error here doesn't do any good because program should continue to operate regardless.
-																																				// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
-
+#ifdef PLATFORM_WINDOWS
+	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
+							// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
+#else
+	InputStream::init();				// Initialise InputStream, doesn't do anything on Windows, so only necessary on Linux.
+#endif
 	// Only enable colors if stdout is a TTY to make reading piped output easier for other programs.
-	if (isatty(fileno(stdout))) {				// TODO: fileno is useless here is it not? Just use STDIN_FILENO define.
-#ifdef PLATFORM_WINDOWS																															// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
+	if (isatty(STDOUT_FILENO)) {
+#ifdef PLATFORM_WINDOWS					// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
 		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
 		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }
 		DWORD mode;
@@ -366,32 +350,31 @@ int main(int argc, char** argv) {
 	}
 	else { isOutputColored = false; }
 
-	manageArgs(argc, argv);																														// Manage the arguments so that we don't have to worry about it here.
+	manageArgs(argc, argv);				// Manage the arguments so that we don't have to worry about it here.
 
-	InputStream::init();																														// Initialize input streaming. Doesn't do anything on windows.
-
-	std::string line;																															// Storage for the current line that the algorithm is working on.
-	std::smatch matchData;																														// Storage for regex match data, which we use to color matches.
+	std::string line;				// Storage for the current line that the algorithm is working on.
+	std::smatch matchData;				// Storage for regex match data, which we use to color matches.
 
 	// Branch based on if the output is colored or not. This is so that we don't check it over and over again inside the loop, which is terrible.
-	if (isOutputColored) {																														// If output is colored, activate colors and do the more complex matching algorithm
+	if (isOutputColored) {				// If output is colored, activate colors and do the more complex matching algorithm
 		color::unsafeInitRed();
 		color::unsafeInitReset();
 
+#ifdef PLATFORM_WINDOWS
 		while (shouldLoopRun) {
+#else
+		while (true) {
+#endif
 			if (InputStream::readLine(line)) {
-#ifdef PLATFORM_WINDOWS																															// InputStream::readLine is blocking on windows, so EOF is signaled with a true return, so break out here.
+#ifdef PLATFORM_WINDOWS		// InputStream::readLine is blocking on windows, so EOF is signaled with a true return, so break out here.
 				break;
 #else
-				if (InputStream::eof) { break; }																								// EOF is signaled with InputStream::eof on Linux, so break out when that is encountered.
-				// The below code theoretically only runs when the user is hesitating at the terminal, so it shouldn't negatively impact any piped operations or anything like that.
-				std::this_thread::sleep_for(std::chrono::milliseconds(LOOP_SLEEP_DURATION));																		// Wait for 1 ms. Takes thread of running queue and pauses it, not only letting other processes take CPU time, but actively using nothing.
-				std::this_thread::yield();																										// Immediately yield after regaining control. If thread somehow doesn't get put at the back of running queue after sleep_for, this ensures it, which is good.
-				continue;																														// Line isn't complete, continue to build line.
+				if (InputStream::eof) { break; }		// EOF is signaled with InputStream::eof on Linux, so break out when that is encountered.
+				continue;					// Line isn't complete, continue to build line.
 #endif
 			}
 
-			if (std::regex_search(line, matchData, keyphraseRegex)) {																			// Highlighted regex search algorithm.
+			if (std::regex_search(line, matchData, keyphraseRegex)) {		// Highlighted regex search algorithm.
 				do {
 					ptrdiff_t matchPosition = matchData.position();
 					std::cout.write(line.c_str(), matchPosition);
@@ -400,37 +383,39 @@ int main(int argc, char** argv) {
 					std::cout << color::reset;
 					line = matchData.suffix();
 				} while (std::regex_search(line, matchData, keyphraseRegex));
-				std::cout << line << std::endl;																									// Print the rest of the line, where no match was found. The std::endl is important here.
+				std::cout << line << std::endl;							// Print the rest of the line, where no match was found. The std::endl is important here.
 			}
 
-			line.clear();																														// Clear line buffer so we can use it again.
+			line.clear();										// Clear line buffer so we can use it again.
 		}
 
-		color::release();
-		InputStream::release();																													// This doesn't do anything on Windows.
-		return EXIT_SUCCESS;
+		goto releaseAndExit;
 	}
 
-	color::unsafeInitPipedRed();																												// If output isn't colored, don't activate colors and do the simple matching algorithm.
+	color::unsafeInitPipedRed();					// If output isn't colored, don't activate colors and do the simple matching algorithm.
 	color::unsafeInitPipedReset();
 
-	while (shouldLoopRun) {
-		if (InputStream::readLine(line)) {
 #ifdef PLATFORM_WINDOWS
+	while (shouldLoopRun) {
+#else
+	while (true) {
+#endif
+		if (InputStream::readLine(line)) {
+#ifdef PLATFORM_WINDOWS		// InputStream::readLine is blocking on windows, so EOF is signaled with a true return, so break out here.
 			break;
 #else
-			if (InputStream::eof) { break; }
-			std::this_thread::sleep_for(std::chrono::milliseconds(LOOP_SLEEP_DURATION));
-			std::this_thread::yield();
-			continue;
+			if (InputStream::eof) { break; }		// EOF is signaled with InputStream::eof on Linux, so break out when that is encountered.
+			continue;					// Line isn't complete, continue to build line.
 #endif
-		}
-
-		if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; }												// Print lines that match the regex.
-
-		line.clear();
 	}
 
+	if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; }												// Print lines that match the regex.
+
+	line.clear();
+}
+
+releaseAndExit:
 	color::release();
-	InputStream::release();
+	InputStream::release();										// This doesn't do anything on Windows.
+	return EXIT_SUCCESS;
 }
