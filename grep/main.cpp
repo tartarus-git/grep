@@ -4,8 +4,10 @@
 #define INPUT_STREAM_BUFFER_SIZE_STEP 256																				// How much more memory to reallocate with if the bounds of the previous memory were hit.
 
 #include <csignal>
+#ifndef PLATFORM_WINDOWS
 #include <sys/signalfd.h>
 #include <poll.h>
+#endif
 
 #ifdef PLATFORM_WINDOWS
 #define WIN32_LEAN_AND_MEAN																								// Include Windows.h to get access to the few winapi functions that we need, such as the ones for getting console input handle and setting ANSI escape code support.
@@ -27,18 +29,14 @@
 #include <thread>																										// For access to std::this_thread::sleep_for() and std::this_thread::yield().
 
 #include <stdio.h>
-#ifdef PLATFORM_WINDOWS
-#define fileno(x) _fileno(x)																							// Renaming for compatibility with the Linux version of the function call.
-#endif
 #include <iostream>
 #include <string>
 #include <regex>
 
 #ifdef PLATFORM_WINDOWS																									// This define is already defined in one of the Linux-only headers, but for Windows, we need to explicitly do it.
 #define STDIN_FILENO 0
+#define STDOUT_FILENO 1
 #endif
-
-#define LOOP_SLEEP_DURATION 10
 
 // ANSI escape code helpers.
 #define ANSI_ESC_CODE_PREFIX "\033["
@@ -139,10 +137,10 @@ void releaseOutputStyling() {
 	color::release();
 }
 
-#ifdef PLATFORM_WINDOWS
+#ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
 // Flag so the main loop knows when to quit because of a SIGINT.
 bool shouldLoopRun = true;
-void signalHandler(int signum) { shouldLoopRun = false; }																		// Gets called on SIGINT.
+void signalHandler(int signum) { shouldLoopRun = false; }							// Gets called on SIGINT.
 #endif
 
 // Collection of flags. These correspond to command-line flags you can set for the program.
@@ -226,12 +224,10 @@ void manageArgs(int argc, char** argv) {
 	}
 }
 
-// Handles input in a buffered way, also accounts for SIGINT while reading and reacts by signalling EOF.
+// Handles input in a buffered way.
 class InputStream {
-#ifdef PLATFORM_WINDOWS					// We don't do any special signal handling or custom buffering on Windows. No need for member variables.
+#ifdef PLATFORM_WINDOWS
 public:
-
-	static void init() { }
 #else
 	static pollfd fds[2];				// File descriptors to poll. One for stdin and one for a signal fd.
 	static sigset_t sigmask;			// Signals to handle with poll.
@@ -239,14 +235,12 @@ public:
 	static char* buffer;
 	static size_t bufferSize;
 
-	static ssize_t bytesRead;			// Position of read head in buffer.
+	static ssize_t bytesRead;				// Position of read head in buffer.
 	static ssize_t bytesReceived;			// Position of write head in buffer.
 
 public:
-	static bool eof;				// True if EOF is encountered or if SIGINT is encountered.
-
 	static void init() {
-		buffer = new char[bufferSize];						// Initialize buffer with the starting amount of RAM space.
+		buffer = new char[bufferSize];								// Initialize buffer with the starting amount of RAM space.
 		
 		// Add SIGINT to set of tracked signals.
 		if (sigemptyset(&sigmask) == -1) { goto errorBranch; }
@@ -268,33 +262,32 @@ errorBranch:	fds[1].fd = -1;					// Tell poll to ignore this entry in the fds ar
 	}
 #endif
 
-	static bool readLine(std::string& line) {	// Returns false if no error, true if EOF or nothing to read. EOF is signaled by eof member variable in Linux. In Windows nothing to read state doesn't exist.
+	static bool readLine(std::string& line) {						// Returns false on success. Returns true on EOF in Windows. Returns true on EOF or SIGINT or error on Linux.
 #ifdef PLATFORM_WINDOWS
 		if (std::cin.eof()) { return true; }
 		std::getline(std::cin, line);
 		return false;
 #else
 		while (true) {
-			for (; bytesRead < bytesReceived; bytesRead++) {																// Try reading as much as possible from buffer.
+			for (; bytesRead < bytesReceived; bytesRead++) {							// Read all the data in the buffer.
 				char character = buffer[bytesRead];
 				if (character == '\n') { bytesRead += 1; return false; }
 				line += character;
 			}
 
-
+			// When no more data left in buffer, try get more.
 			int result = poll(fds, 2, -1);			// Block until we either get some input on stdin or get a SIGINT.
 
-			if (fds[1].revents) { eof = true; return true; }		// Signal EOF if we got a SIGINT.
+			if (fds[1].revents) { return true; }		// Signal EOF if we got a SIGINT.
 
 			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);		// If input available on stdin, read as much as we can fit into the buffer.
 
-			if (bytesReceived == 0) { eof = true; return true; }		// In case of actual EOF, signal EOF.
+			if (bytesReceived == 0) { return true; }		// In case of actual EOF, signal EOF.
 			if (bytesReceived == -1) {					// In case of error, log and signal EOF for graceful exit of calling code.
 				format::initError();					// Assumes the colors are already set up because this is only triggered inside the main loop.
 				format::initEndl();
 				std::cout << format::error << "failed to read from stdin" << format::endl;
 				format::release();
-				eof = true;
 				return true;
 
 			}
@@ -316,24 +309,22 @@ errorBranch:	fds[1].fd = -1;					// Tell poll to ignore this entry in the fds ar
 #endif
 };
 
-#ifndef PLATFORM_WINDOWS																														// Static members variables only need to be initialized in Linux because we don't have any in Windows.
+#ifndef PLATFORM_WINDOWS										// Static members variables only need to be initialized in Linux because we don't have any in Windows.
+pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };			// Parts of this data get changed later in runtime.
+sigset_t InputStream::sigmask;
+
 char* InputStream::buffer;
 size_t InputStream::bufferSize = INPUT_STREAM_BUFFER_START_SIZE;
 
 ssize_t InputStream::bytesRead = 0;
 ssize_t InputStream::bytesReceived = 0;
-
-bool InputStream::eof = false;
-
-pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };			// Parts of this data get changed later in runtime.
-sigset_t InputStream::sigmask;
 #endif
 
 // Program entry point
 int main(int argc, char** argv) {
 #ifdef PLATFORM_WINDOWS
 	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
-							// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
+											// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 #else
 	InputStream::init();				// Initialise InputStream, doesn't do anything on Windows, so only necessary on Linux.
 #endif
@@ -365,14 +356,7 @@ int main(int argc, char** argv) {
 #else
 		while (true) {
 #endif
-			if (InputStream::readLine(line)) {
-#ifdef PLATFORM_WINDOWS		// InputStream::readLine is blocking on windows, so EOF is signaled with a true return, so break out here.
-				break;
-#else
-				if (InputStream::eof) { break; }		// EOF is signaled with InputStream::eof on Linux, so break out when that is encountered.
-				continue;					// Line isn't complete, continue to build line.
-#endif
-			}
+			if (InputStream::readLine(line)) { break; }					// Break out of loop on EOF.
 
 			if (std::regex_search(line, matchData, keyphraseRegex)) {		// Highlighted regex search algorithm.
 				do {
@@ -400,19 +384,12 @@ int main(int argc, char** argv) {
 #else
 	while (true) {
 #endif
-		if (InputStream::readLine(line)) {
-#ifdef PLATFORM_WINDOWS		// InputStream::readLine is blocking on windows, so EOF is signaled with a true return, so break out here.
-			break;
-#else
-			if (InputStream::eof) { break; }		// EOF is signaled with InputStream::eof on Linux, so break out when that is encountered.
-			continue;					// Line isn't complete, continue to build line.
-#endif
+		if (InputStream::readLine(line)) { break; }
+
+		if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; }												// Print lines that match the regex.
+
+		line.clear();
 	}
-
-	if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; }												// Print lines that match the regex.
-
-	line.clear();
-}
 
 releaseAndExit:
 	color::release();
