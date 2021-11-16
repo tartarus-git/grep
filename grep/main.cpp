@@ -410,3 +410,12 @@ If it does become a problem, I'll just use the Windows findstr for that case.
 For now, I'm just going to leave it like this.
 
 */
+
+/*
+
+NOTE:
+
+There seems to be a bug in std::regex when using keyphrase ".*". When just doing match over the whole line and not highlighting, everything is fine, but for some reason, it gets stuck on match 0 and just keeps looping over and over.
+You could say that it has to happen this way because, while it is strange, that behaviour makes the most sense based on the code above, but why is everything fine for keyphrase ".*k" then. Shouldn't the same problem apply there?
+
+*/
