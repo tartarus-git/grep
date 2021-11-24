@@ -146,15 +146,15 @@ void signalHandler(int signum) { shouldLoopRun = false; }							// Gets called o
 // Collection of flags. These correspond to command-line flags you can set for the program.
 namespace flags {
 	bool caseSensitive = false;
+	bool allLines = false;
 }
 
 // Parse a single flag group. A flag group is made out of a bunch of single letter flags.
 void parseFlagGroup(char* arg) {
 	for (int i = 0; ; i++) {
 		switch (arg[i]) {
-		case 'c':
-			flags::caseSensitive = true;
-			break;
+		case 'c': flags::caseSensitive = true; break;
+		case 'a': flags::allLines = true; break;
 		case '\0': return;
 		default:
 			initOutputStyling();
@@ -320,6 +320,17 @@ ssize_t InputStream::bytesRead = 0;
 ssize_t InputStream::bytesReceived = 0;
 #endif
 
+void highlightMatches(std::string& line, std::smatch matchData) {
+	do {
+		ptrdiff_t matchPosition = matchData.position();
+		std::cout.write(line.c_str(), matchPosition);
+		std::cout << color::red;
+		std::cout.write(line.c_str() + matchPosition, matchData.length());
+		std::cout << color::reset;
+		line = matchData.suffix();
+	} while (std::regex_search(line, matchData, keyphraseRegex));
+}
+
 // Program entry point
 int main(int argc, char** argv) {
 #ifdef PLATFORM_WINDOWS
@@ -351,43 +362,55 @@ int main(int argc, char** argv) {
 		color::unsafeInitRed();
 		color::unsafeInitReset();
 
+		if (flags::allLines) {
+#ifdef PLATFORM_WINDOWS
+			while (shouldLoopRun) {
+#else
+			while (true) {
+#endif
+				if (InputStream::readLine(line)) { break; }				// Break out of loop on EOF.
+				if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(line, matchData); }
+				std::cout << line << std::endl;							// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
+				line.clear();											// Clear line buffer so readLine doesn't add next line onto the end.
+			}
+			goto releaseAndExit;
+		}
+
 #ifdef PLATFORM_WINDOWS
 		while (shouldLoopRun) {
 #else
 		while (true) {
 #endif
 			if (InputStream::readLine(line)) { break; }					// Break out of loop on EOF.
-
-			if (std::regex_search(line, matchData, keyphraseRegex)) {		// Highlighted regex search algorithm.
-				do {
-					ptrdiff_t matchPosition = matchData.position();
-					std::cout.write(line.c_str(), matchPosition);
-					std::cout << color::red;
-					std::cout.write(line.c_str() + matchPosition, matchData.length());
-					std::cout << color::reset;
-					line = matchData.suffix();
-				} while (std::regex_search(line, matchData, keyphraseRegex));
-				std::cout << line << std::endl;							// Print the rest of the line, where no match was found. The std::endl is important here.
-			}
-
-			line.clear();										// Clear line buffer so we can use it again.
+			if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(line, matchData); std::cout << line << std::endl; }
+			line.clear();												// Clear line buffer so we can use it again.
 		}
-
 		goto releaseAndExit;
 	}
 
-	color::unsafeInitPipedRed();					// If output isn't colored, don't activate colors and do the simple matching algorithm.
+	color::unsafeInitPipedRed();					// If output isn't colored, don't activate colors.
 	color::unsafeInitPipedReset();
 
+	if (flags::allLines) {
+#ifdef PLATFORM_WINDOWS
+		while (shouldLoopRun) {
+#else
+		while (true) {
+#endif
+			if (InputStream::readLine(line)) { break; }
+			std::cout << line << std::endl;						// If flags::allLines, output every line from input.
+			line.clear();
+		}
+		goto releaseAndExit;
+	}
+	
 #ifdef PLATFORM_WINDOWS
 	while (shouldLoopRun) {
 #else
 	while (true) {
 #endif
 		if (InputStream::readLine(line)) { break; }
-
-		if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; }												// Print lines that match the regex.
-
+		if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; }					// Print lines that match the regex.
 		line.clear();
 	}
 
