@@ -331,6 +331,15 @@ void highlightMatches(std::string& line, std::smatch matchData) {
 	} while (std::regex_search(line, matchData, keyphraseRegex));
 }
 
+#ifdef PLATFORM_WINDOWS
+#define MAIN_WHILE while (shouldLoopRun)
+#else
+#define MAIN_WHILE while (true)
+#endif
+
+#define LINE_WHILE_START MAIN_WHILE { if (InputStream::readLine(line)) { break; }
+#define LINE_WHILE_END line.clear(); } goto releaseAndExit;
+
 // Program entry point
 int main(int argc, char** argv) {
 #ifdef PLATFORM_WINDOWS
@@ -363,61 +372,32 @@ int main(int argc, char** argv) {
 		color::unsafeInitReset();
 
 		if (flags::allLines) {
-#ifdef PLATFORM_WINDOWS
-			while (shouldLoopRun) {
-#else
-			while (true) {
-#endif
-				if (InputStream::readLine(line)) { break; }				// Break out of loop on EOF.
+			LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(line, matchData); }
 				std::cout << line << std::endl;							// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
-				line.clear();											// Clear line buffer so readLine doesn't add next line onto the end.
-			}
-			goto releaseAndExit;
+			LINE_WHILE_END
 		}
 
-#ifdef PLATFORM_WINDOWS
-		while (shouldLoopRun) {
-#else
-		while (true) {
-#endif
-			if (InputStream::readLine(line)) { break; }					// Break out of loop on EOF.
+		LINE_WHILE_START
 			if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(line, matchData); std::cout << line << std::endl; }
-			line.clear();												// Clear line buffer so we can use it again.
-		}
-		goto releaseAndExit;
+		LINE_WHILE_END
 	}
 
-	color::unsafeInitPipedRed();					// If output isn't colored, don't activate colors.
+	color::unsafeInitPipedRed();					// If output isn't colored, activate uncolored versions of red and reset.
 	color::unsafeInitPipedReset();
 
 	if (flags::allLines) {
-#ifdef PLATFORM_WINDOWS
-		while (shouldLoopRun) {
-#else
-		while (true) {
-#endif
-			if (InputStream::readLine(line)) { break; }
+		LINE_WHILE_START
 			std::cout << line << std::endl;						// If flags::allLines, output every line from input.
 			line.clear();
-		}
-		goto releaseAndExit;
+		LINE_WHILE_END
 	}
 	
-#ifdef PLATFORM_WINDOWS
-	while (shouldLoopRun) {
-#else
-	while (true) {
-#endif
-		if (InputStream::readLine(line)) { break; }
-		if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; }					// Print lines that match the regex.
-		line.clear();
-	}
+	LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; } LINE_WHILE_END
 
 releaseAndExit:
 	color::release();
 	InputStream::release();										// This doesn't do anything on Windows.
-	return EXIT_SUCCESS;
 }
 
 /*
