@@ -3,6 +3,8 @@
 #define INPUT_STREAM_BUFFER_START_SIZE 256																				// The starting size for the stream buffer.
 #define INPUT_STREAM_BUFFER_SIZE_STEP 256																				// How much more memory to reallocate with if the bounds of the previous memory were hit.
 
+#define HISTORY_BUFFER_MAX_LINE_COUNT 63																				// Maximum num of lines storable in history buffer when using --context x flag. Note that the count of history buffer is HISTORY_BUFFER_MAX_LINE_COUNT + 1 because of circular buffer.
+
 #include <csignal>
 #ifndef PLATFORM_WINDOWS
 #include <sys/signalfd.h>
@@ -146,7 +148,42 @@ void signalHandler(int signum) { shouldLoopRun = false; }							// Gets called o
 // Collection of flags. These correspond to command-line flags you can set for the program.
 namespace flags {
 	bool caseSensitive = false;
+	bool context = false;
 	bool allLines = false;
+}
+
+// Context history buffer.
+std::string* historyBuffer;
+unsigned int historyBuffer_len;
+unsigned int historyBuffer_lastIndex;
+unsigned int historyBufferIndex = 0;
+unsigned int historyBufferBeginIndex = 0;
+
+void pushToHistoryBuffer(const std::string& line) {
+	historyBuffer[historyBufferIndex] = line;
+	if (historyBufferIndex == historyBuffer_lastIndex) {				// TODO: I'm too tired right now so I can't, but I think there is something wrong with this function efficiency-wise. This if statement needs to be moved down or something because of rate of hits or something.
+		if (historyBufferBeginIndex == 0) { historyBufferBeginIndex = 1; }
+		historyBufferIndex = 0;
+		return;
+	}
+	if (historyBufferIndex == historyBufferBeginIndex - 1) {
+		if (historyBufferBeginIndex == historyBuffer_lastIndex) {
+			historyBufferIndex = historyBuffer_lastIndex;
+			historyBufferBeginIndex = 0;
+			return;
+		}
+		historyBufferBeginIndex++;
+	}
+	historyBufferIndex++;
+}			// TODO: This history buffer construct is absolutely perfect for use in a class. Do that instead of having all these would-be members floating around global scope.
+
+void printHistoryBuffer() {
+	for (int i = historyBufferBeginIndex; ; ) {
+		if (i == historyBufferIndex) { historyBufferIndex = historyBufferBeginIndex; return; }
+		std::cout << historyBuffer[i] << std::endl;
+		if (i == historyBuffer_lastIndex) { i = 0; continue; }
+		i++;
+	}
 }
 
 // Parse a single flag group. A flag group is made out of a bunch of single letter flags.
@@ -157,12 +194,40 @@ void parseFlagGroup(char* arg) {
 		case 'a': flags::allLines = true; break;
 		case '\0': return;
 		default:
-			initOutputStyling();
+			initOutputStyling();				// TODO: This is removable if you just have format::error allocate and deallocate itself as well as format::endl. Obviously this should be controllable because it would be pretty bad in the loop in main.
 			std::cout << format::error << "one or more flag arguments is invalid" << format::endl;
 			releaseOutputStyling();
 			exit(EXIT_SUCCESS);
 		}
 	}
+}
+
+#define ASCII_NUM_BOUND_LOWER 48
+#define ASCII_NUM_BOUND_UPPER 57
+
+bool addToUInt(unsigned int& value, char character) {
+	if (character < ASCII_NUM_BOUND_LOWER || character > ASCII_NUM_BOUND_UPPER) { return false; }
+	value = value * 10 + (character - ASCII_NUM_BOUND_LOWER);
+	return true;
+}
+
+unsigned int parseUInt(char* string) {
+	unsigned int result = 0;
+	char character = string[0];
+	if (character != '\0') {
+		if (addToUInt(result, character)) {
+			for (int i = 1; ; i++) {
+				character = string[i];
+				if (addToUInt(result, character)) { continue; }
+				if (character == '\0' && result <= HISTORY_BUFFER_MAX_LINE_COUNT) { return result; }
+				break;
+			}
+		}
+	}
+	initOutputStyling();
+	std::cout << format::error << "invalid value for --context flag" << format::endl;
+	releaseOutputStyling();
+	exit(EXIT_SUCCESS);
 }
 
 // Show help, but only if our output is connected to a TTY. This is simply to be courteous to any programs that might be receiving our stdout through a pipe.
@@ -176,6 +241,21 @@ unsigned int parseFlags(int argc, char** argv) {
 			if (arg[1] == '-') {
 				const char* flagTextStart = arg + 2;
 				if (*flagTextStart == '\0') { continue; }
+				if (!strcmp(flagTextStart, "context")) {
+					i++;
+					if (i == argc) {
+						initOutputStyling();
+						std::cout << format::error << "the --context flag was not supplied with a value" << format::endl;
+						releaseOutputStyling();
+						exit(EXIT_SUCCESS);
+					}
+					historyBuffer_lastIndex = parseUInt(argv[i]);
+					if (historyBuffer_lastIndex == 0) { continue; }								// Context value 0 is the same as no context, so don't bother setting context up.
+					flags::context = true;
+					historyBuffer_len = historyBuffer_lastIndex + 1;
+					historyBuffer = new std::string[historyBuffer_len];
+					continue;
+				}
 				if (!strcmp(flagTextStart, "help")) { showHelp(); exit(EXIT_SUCCESS); }
 				if (!strcmp(flagTextStart, "h")) { showHelp(); exit(EXIT_SUCCESS); }
 				initOutputStyling();
@@ -320,7 +400,10 @@ ssize_t InputStream::bytesRead = 0;
 ssize_t InputStream::bytesReceived = 0;
 #endif
 
-void highlightMatches(std::string& line, std::smatch matchData) {
+std::string line;
+std::smatch matchData;
+
+void highlightMatches() {				// I assume this will be inlined. Probably not in debug mode, but almost definitely in release mode.
 	do {
 		ptrdiff_t matchPosition = matchData.position();
 		std::cout.write(line.c_str(), matchPosition);
@@ -363,35 +446,89 @@ int main(int argc, char** argv) {
 
 	manageArgs(argc, argv);				// Manage the arguments so that we don't have to worry about it here.
 
-	std::string line;				// Storage for the current line that the algorithm is working on.
-	std::smatch matchData;				// Storage for regex match data, which we use to color matches.
-
 	// Branch based on if the output is colored or not. This is so that we don't check it over and over again inside the loop, which is terrible.
 	if (isOutputColored) {				// If output is colored, activate colors and do the more complex matching algorithm
 		color::unsafeInitRed();
 		color::unsafeInitReset();
 
+		if (flags::context) {
+			LINE_WHILE_START
+				if (std::regex_search(line, matchData, keyphraseRegex)) {
+					printHistoryBuffer();
+					highlightMatches(); std::cout << line << std::endl;
+					unsigned int padding = historyBuffer_lastIndex;
+					while (true) {
+#ifdef PLATFORM_WINDOWS
+						if (shouldLoopRun) {
+#endif
+							line.clear();
+							if (InputStream::readLine(line)) { goto releaseAndExit; }
+							if (std::regex_search(line, matchData, keyphraseRegex)) {
+								highlightMatches(); std::cout << line << std::endl;
+								padding = historyBuffer_lastIndex;
+								continue;
+							}
+							std::cout << line << std::endl;
+							if (padding == 1) { line.clear(); break; }
+							padding--;
+							continue;
+#ifdef PLATFORM_WINDOWS
+						}
+						goto releaseAndExit;
+#endif
+					}
+					continue;
+				}
+				pushToHistoryBuffer(line);
+			LINE_WHILE_END
+		}
+
 		if (flags::allLines) {
 			LINE_WHILE_START
-				if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(line, matchData); }
+				if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
 				std::cout << line << std::endl;							// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
 			LINE_WHILE_END
 		}
 
-		LINE_WHILE_START
-			if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(line, matchData); std::cout << line << std::endl; }
-		LINE_WHILE_END
+		LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } LINE_WHILE_END
 	}
 
 	color::unsafeInitPipedRed();					// If output isn't colored, activate uncolored versions of red and reset.
 	color::unsafeInitPipedReset();
 
-	if (flags::allLines) {
+	if (flags::context) {
 		LINE_WHILE_START
-			std::cout << line << std::endl;						// If flags::allLines, output every line from input.
-			line.clear();
+			if (std::regex_search(line, matchData, keyphraseRegex)) {
+				printHistoryBuffer();
+				std::cout << line << std::endl;
+				unsigned int padding = historyBuffer_lastIndex;
+				while (true) {
+#ifdef PLATFORM_WINDOWS
+					if (shouldLoopRun) {
+#endif
+						line.clear();
+						if (InputStream::readLine(line)) { goto releaseAndExit; }
+						if (std::regex_search(line, matchData, keyphraseRegex)) {
+							std::cout << line << std::endl;
+							padding = historyBuffer_lastIndex;
+							continue;
+						}
+						std::cout << line << std::endl;
+						if (padding == 1) { line.clear(); break; }
+						padding--;
+						continue;
+#ifdef PLATFORM_WINDOWS
+					}
+					goto releaseAndExit;
+#endif
+				}
+				continue;
+			}
+			pushToHistoryBuffer(line);
 		LINE_WHILE_END
 	}
+
+	if (flags::allLines) { LINE_WHILE_START std::cout << line << std::endl; LINE_WHILE_END }
 	
 	LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; } LINE_WHILE_END
 
