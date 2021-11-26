@@ -553,7 +553,6 @@ releaseAndExit:
 	HistoryBuffer::release();
 	InputStream::release();																			// This doesn't do anything on Windows.
 	color::release();
-	std::cout << "released everything, dying..." << std::endl;
 }
 
 /*
