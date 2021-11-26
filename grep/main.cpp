@@ -182,7 +182,7 @@ public:
 	}
 
 	static void print() {
-		for (int i = beginIndex; ; ) {
+		for (unsigned int i = beginIndex; ; ) {
 			if (i == index) { index = beginIndex; return; }
 			std::cout << buffer[i] << std::endl;
 			if (i == buffer_lastIndex) { i = 0; continue; }
@@ -366,7 +366,13 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			}
 
 			// When no more data left in buffer, try get more.
-			int result = poll(fds, 2, -1);																			// Block until we either get some input on stdin or get a SIGINT.
+			if (poll(fds, 2, -1) == -1) {																			// Block until we either get some input on stdin or get a SIGINT.
+				format::initError();
+				format::initEndl();
+				std::cout << format::error << "failed to poll stdin and SIGINT" << format::endl;
+				format::release();
+				return true;
+			}
 
 			if (fds[1].revents) { return true; }																	// Signal EOF if we got a SIGINT.
 
