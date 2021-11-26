@@ -5,7 +5,7 @@
 
 #define HISTORY_BUFFER_MAX_LINE_COUNT 63																				// Maximum num of lines storable in history buffer when using --context x flag. Note that the count of history buffer is HISTORY_BUFFER_MAX_LINE_COUNT + 1 because of circular buffer.
 
-#include <csignal>
+#include <csignal>																										// Signalling and polling things.
 #ifndef PLATFORM_WINDOWS
 #include <sys/signalfd.h>
 #include <poll.h>
@@ -45,14 +45,15 @@
 #define ANSI_ESC_CODE_SUFFIX "m"
 #define ANSI_ESC_CODE_MIN_SIZE ((sizeof(ANSI_ESC_CODE_PREFIX) - 1) + (sizeof(ANSI_ESC_CODE_SUFFIX) - 1))
 
-// Help text.
 const char* helpText = "grep accepts text as input and outputs the lines from the input that have the specified keyphrase in them\n" \
 					   "\n" \
-					   "usage: grep [-c] <regex keyphrase>\n" \
+					   "usage: grep [-ca] [--context <amount>] <regex keyphrase>\n" \
 					   "       grep <--help|--h>            -->            shows help text\n" \
 					   "\n" \
 					   "arguments:\n" \
-							"\t-c        -->        be case sensitive when matching";
+							"\t-c                           -->         be case sensitive when matching\n" \
+							"\t-a                           -->         print all lines from input but still color matches\n" \
+							"\t--context <amount>           -->         print the specified amount of context (in lines) around each matched line\n";
 
 // Flag to keep track of whether we should color output or not. Can also be used for testing if output is a TTY or not.
 bool isOutputColored;
@@ -140,9 +141,8 @@ void releaseOutputStyling() {
 }
 
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
-// Flag so the main loop knows when to quit because of a SIGINT.
 bool shouldLoopRun = true;
-void signalHandler(int signum) { shouldLoopRun = false; }							// Gets called on SIGINT.
+void signalHandler(int signum) { shouldLoopRun = false; }
 #endif
 
 // Collection of flags. These correspond to command-line flags you can set for the program.
@@ -152,39 +152,52 @@ namespace flags {
 	bool allLines = false;
 }
 
-// Context history buffer.
-std::string* historyBuffer;
-unsigned int historyBuffer_len;
-unsigned int historyBuffer_lastIndex;
-unsigned int historyBufferIndex = 0;
-unsigned int historyBufferBeginIndex = 0;
+class HistoryBuffer {
+	static std::string* buffer;
+	static unsigned int buffer_len;
+	static unsigned int index;
+	static unsigned int beginIndex;
 
-void pushToHistoryBuffer(const std::string& line) {
-	historyBuffer[historyBufferIndex] = line;
-	if (historyBufferIndex == historyBuffer_lastIndex) {				// TODO: I'm too tired right now so I can't, but I think there is something wrong with this function efficiency-wise. This if statement needs to be moved down or something because of rate of hits or something.
-		if (historyBufferBeginIndex == 0) { historyBufferBeginIndex = 1; }
-		historyBufferIndex = 0;
-		return;
+public:
+	static unsigned int buffer_lastIndex;
+
+	static void init(int historyLength) {
+		buffer_lastIndex = historyLength;
+		buffer_len = historyLength + 1;
+		buffer = new std::string[buffer_len];
 	}
-	if (historyBufferIndex == historyBufferBeginIndex - 1) {
-		if (historyBufferBeginIndex == historyBuffer_lastIndex) {
-			historyBufferIndex = historyBuffer_lastIndex;
-			historyBufferBeginIndex = 0;
+
+	static void push(const std::string& line) {
+		buffer[index] = line;
+		if (index == beginIndex - 1) {
+			if (beginIndex == buffer_lastIndex) { index++; beginIndex = 0; return; }
+			index++; beginIndex++; return;
+		}
+		if (index == buffer_lastIndex) {
+			if (beginIndex == 0) { beginIndex = 1; }
+			index = 0;
 			return;
 		}
-		historyBufferBeginIndex++;
+		index++;
 	}
-	historyBufferIndex++;
-}			// TODO: This history buffer construct is absolutely perfect for use in a class. Do that instead of having all these would-be members floating around global scope.
 
-void printHistoryBuffer() {
-	for (int i = historyBufferBeginIndex; ; ) {
-		if (i == historyBufferIndex) { historyBufferIndex = historyBufferBeginIndex; return; }
-		std::cout << historyBuffer[i] << std::endl;
-		if (i == historyBuffer_lastIndex) { i = 0; continue; }
-		i++;
+	static void print() {
+		for (int i = beginIndex; ; ) {
+			if (i == index) { index = beginIndex; return; }
+			std::cout << buffer[i] << std::endl;
+			if (i == buffer_lastIndex) { i = 0; continue; }
+			i++;
+		}
 	}
-}
+
+	static void release() { if (flags::context) { delete[] buffer; } }
+};
+
+std::string* HistoryBuffer::buffer;
+unsigned int HistoryBuffer::buffer_len;
+unsigned int HistoryBuffer::index = 0;
+unsigned int HistoryBuffer::beginIndex = 0;
+unsigned int HistoryBuffer::buffer_lastIndex;
 
 // Parse a single flag group. A flag group is made out of a bunch of single letter flags.
 void parseFlagGroup(char* arg) {
@@ -194,7 +207,7 @@ void parseFlagGroup(char* arg) {
 		case 'a': flags::allLines = true; break;
 		case '\0': return;
 		default:
-			initOutputStyling();				// TODO: This is removable if you just have format::error allocate and deallocate itself as well as format::endl. Obviously this should be controllable because it would be pretty bad in the loop in main.
+			initOutputStyling();
 			std::cout << format::error << "one or more flag arguments is invalid" << format::endl;
 			releaseOutputStyling();
 			exit(EXIT_SUCCESS);
@@ -249,11 +262,10 @@ unsigned int parseFlags(int argc, char** argv) {
 						releaseOutputStyling();
 						exit(EXIT_SUCCESS);
 					}
-					historyBuffer_lastIndex = parseUInt(argv[i]);
-					if (historyBuffer_lastIndex == 0) { continue; }								// Context value 0 is the same as no context, so don't bother setting context up.
+					unsigned int historyLength = parseUInt(argv[i]);
+					if (historyLength == 0) { continue; }															// Context value 0 is the same as no context, so don't bother setting context up.
 					flags::context = true;
-					historyBuffer_len = historyBuffer_lastIndex + 1;
-					historyBuffer = new std::string[historyBuffer_len];
+					HistoryBuffer::init(historyLength);
 					continue;
 				}
 				if (!strcmp(flagTextStart, "help")) { showHelp(); exit(EXIT_SUCCESS); }
@@ -266,29 +278,29 @@ unsigned int parseFlags(int argc, char** argv) {
 			parseFlagGroup(argv[i] + 1);
 			continue;
 		}
-		return i;													// Return index of first arg that isn't flag arg. Helps calling code parse args.
+		return i;																									// Return index of first arg that isn't flag arg. Helps calling code parse args.
 	}
-	return argc;													// No non-flag argument was found. Return argc because it works nicely with calling code.
+	return argc;																									// No non-flag argument was found. Return argc because it works nicely with calling code.
 }
 
 std::regex keyphraseRegex;
 
 // Arg management function. Handles some argument parsing but pushes flag parsing to parseFlags.
 void manageArgs(int argc, char** argv) {
-	unsigned int keyphraseArgIndex = parseFlags(argc, argv);					// Parse flags before doing anything else.
+	unsigned int keyphraseArgIndex = parseFlags(argc, argv);														// Parse flags before doing anything else.
 	switch (argc - keyphraseArgIndex) {
-	case 0:																		// If no non-flag args were found, throw error.
+	case 0:
 		initOutputStyling();
 		std::cout << format::error << "too few arguments" << format::endl;
 		showHelp();
 		releaseOutputStyling();
 		exit(EXIT_SUCCESS);
-	case 1:																		// If exactly 1 non-flag argument exists, go ahead with program.
-		{	// Unnamed namespace because without it one can't create variables inside switch cases.
+	case 1:
+		{																											// Unnamed namespace because we can't create variables inside switch cases otherwise.
 			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::nosubs | std::regex_constants::optimize;
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
-			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }									// Parse regex keyphrase.
-			catch (const std::regex_error& err) {																		// Catch any errors relating to keyphrase regex syntax and report them.
+			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }								// Parse regex keyphrase.
+			catch (const std::regex_error& err) {																	// Catch any errors relating to keyphrase regex syntax and report them.
 				initOutputStyling();
 				std::cout << format::error << "regex error: " << err.what() << format::endl;
 				releaseOutputStyling();
@@ -296,7 +308,7 @@ void manageArgs(int argc, char** argv) {
 			}
 		}
 		return;
-	default:																	// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
+	default:																										// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
 		initOutputStyling();
 		std::cout << format::error << "too many arguments" << format::endl;
 		releaseOutputStyling();
@@ -309,71 +321,69 @@ class InputStream {
 #ifdef PLATFORM_WINDOWS
 public:
 #else
-	static pollfd fds[2];				// File descriptors to poll. One for stdin and one for a signal fd.
-	static sigset_t sigmask;			// Signals to handle with poll.
+	static pollfd fds[2];																							// File descriptors to poll. One for stdin and one for a signal fd.
+	static sigset_t sigmask;																						// Signals to handle with poll.
 
 	static char* buffer;
 	static size_t bufferSize;
 
-	static ssize_t bytesRead;				// Position of read head in buffer.
-	static ssize_t bytesReceived;			// Position of write head in buffer.
+	static ssize_t bytesRead;																						// Position of read head in buffer.
+	static ssize_t bytesReceived;																					// Position of write head in buffer.
 
 public:
 	static void init() {
-		buffer = new char[bufferSize];								// Initialize buffer with the starting amount of RAM space.
+		buffer = new char[bufferSize];																				// Initialize buffer with the starting amount of RAM space.
 		
 		// Add SIGINT to set of tracked signals.
 		if (sigemptyset(&sigmask) == -1) { goto errorBranch; }
 		if (sigaddset(&sigmask, SIGINT) == -1) { goto errorBranch; }
 
-		// Block the set of tracked signals from being tracked by default because obviously we're tracking them.
+		// Block the set of tracked signals from being handled by default by thread because obviously we're handling them.
 		if (sigprocmask(SIG_BLOCK, &sigmask, nullptr) == -1) { goto errorBranch; }
 
 		// Create new file descriptor. Makes a read available when one of the tracked signals is caught.
 		{
 			int sigfd = signalfd(-1, &sigmask, 0);
-			if (sigfd == -1) { goto errorBranch; }
-
-			fds[1].fd = sigfd;				// Add sigfd to list of to be polled file descriptors, so we can be notified if we get a signal from poll.
+			fds[1].fd = sigfd;																						// Add sigfd to list of to be polled file descriptors, so we can be notified if we get a signal from poll. It doesn't matter if it's -1 because on failure we set it to that anyway.
 			return;
 		}
 
-errorBranch:	fds[1].fd = -1;					// Tell poll to ignore this entry in the fds array.
+errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now unused entry in fds because some error prevented us from setting it up correctly.
 	}
 #endif
 
-	static bool readLine(std::string& line) {						// Returns false on success. Returns true on EOF in Windows. Returns true on EOF or SIGINT or error on Linux.
+	static bool readLine(std::string& line) {																		// Returns false on success. Returns true on EOF in Windows. Returns true on EOF or SIGINT or error on Linux.
 #ifdef PLATFORM_WINDOWS
 		if (std::cin.eof()) { return true; }
 		std::getline(std::cin, line);
 		return false;
 #else
 		while (true) {
-			for (; bytesRead < bytesReceived; bytesRead++) {							// Read all the data in the buffer.
+			for (; bytesRead < bytesReceived; bytesRead++) {														// Read all the data in the buffer.
 				char character = buffer[bytesRead];
 				if (character == '\n') { bytesRead += 1; return false; }
 				line += character;
 			}
 
 			// When no more data left in buffer, try get more.
-			int result = poll(fds, 2, -1);			// Block until we either get some input on stdin or get a SIGINT.
+			int result = poll(fds, 2, -1);																			// Block until we either get some input on stdin or get a SIGINT.
 
-			if (fds[1].revents) { return true; }		// Signal EOF if we got a SIGINT.
+			if (fds[1].revents) { return true; }																	// Signal EOF if we got a SIGINT.
 
-			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);		// If input available on stdin, read as much as we can fit into the buffer.
+			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);													// Read as much as we can fit into the buffer.
 
-			if (bytesReceived == 0) { return true; }		// In case of actual EOF, signal EOF.
-			if (bytesReceived == -1) {					// In case of error, log and signal EOF for graceful exit of calling code.
-				format::initError();					// Assumes the colors are already set up because this is only triggered inside the main loop.
+			if (bytesReceived == 0) { return true; }																// In case of actual EOF, signal EOF.
+			if (bytesReceived == -1) {																				// In case of error, log and signal EOF.
+				format::initError();																				// Assumes the colors are already set up because this is only triggered inside the main loop.
 				format::initEndl();
 				std::cout << format::error << "failed to read from stdin" << format::endl;
 				format::release();
 				return true;
 
 			}
-			bytesRead = 0;							// If new data is read, the read head needs to be reset to the beginning of the buffer.
+			bytesRead = 0;																							// If new data is read, the read head needs to be reset to the beginning of the buffer.
 
-			if (bytesReceived == bufferSize) {	// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
+			if (bytesReceived == bufferSize) {																		// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
 				size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
 				char* newBuffer = (char*)realloc(buffer, newBufferSize);
 				if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
@@ -389,8 +399,8 @@ errorBranch:	fds[1].fd = -1;					// Tell poll to ignore this entry in the fds ar
 #endif
 };
 
-#ifndef PLATFORM_WINDOWS										// Static members variables only need to be initialized in Linux because we don't have any in Windows.
-pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };			// Parts of this data get changed later in runtime.
+#ifndef PLATFORM_WINDOWS																							// Static members variables only need to be initialized in Linux because we don't have any in Windows.
+pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };												// Parts of this data get changed later in runtime.
 sigset_t InputStream::sigmask;
 
 char* InputStream::buffer;
@@ -403,7 +413,7 @@ ssize_t InputStream::bytesReceived = 0;
 std::string line;
 std::smatch matchData;
 
-void highlightMatches() {				// I assume this will be inlined. Probably not in debug mode, but almost definitely in release mode.
+void highlightMatches() {																							// I assume this will be inlined. Probably not in debug mode, but almost definitely in release mode.
 	do {
 		ptrdiff_t matchPosition = matchData.position();
 		std::cout.write(line.c_str(), matchPosition);
@@ -429,11 +439,11 @@ int main(int argc, char** argv) {
 	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
 											// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 #else
-	InputStream::init();				// Initialise InputStream, doesn't do anything on Windows, so only necessary on Linux.
+	InputStream::init();					// Initialise InputStream, doesn't do anything on Windows, so only necessary on Linux.
 #endif
 	// Only enable colors if stdout is a TTY to make reading piped output easier for other programs.
 	if (isatty(STDOUT_FILENO)) {
-#ifdef PLATFORM_WINDOWS					// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
+#ifdef PLATFORM_WINDOWS						// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
 		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
 		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }
 		DWORD mode;
@@ -444,20 +454,27 @@ int main(int argc, char** argv) {
 	}
 	else { isOutputColored = false; }
 
-	manageArgs(argc, argv);				// Manage the arguments so that we don't have to worry about it here.
+	manageArgs(argc, argv);					// Manage the arguments so that we don't have to worry about it here.
 
 	// Branch based on if the output is colored or not. This is so that we don't check it over and over again inside the loop, which is terrible.
-	if (isOutputColored) {				// If output is colored, activate colors and do the more complex matching algorithm
+	if (isOutputColored) {					// If output is colored, activate colors and do the more complex matching algorithm
 		color::unsafeInitRed();
 		color::unsafeInitReset();
+		
+		if (flags::allLines) {
+			LINE_WHILE_START
+				if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
+				std::cout << line << std::endl;														// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
+			LINE_WHILE_END
+		}
 
 		if (flags::context) {
 			LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
-					printHistoryBuffer();
+					HistoryBuffer::print();
 					highlightMatches(); std::cout << line << std::endl;
-					unsigned int padding = historyBuffer_lastIndex;
-					while (true) {
+					unsigned int padding = HistoryBuffer::buffer_lastIndex;
+					while (true) {																	// History has already been printed, now we have to print the future padding.
 #ifdef PLATFORM_WINDOWS
 						if (shouldLoopRun) {
 #endif
@@ -465,7 +482,7 @@ int main(int argc, char** argv) {
 							if (InputStream::readLine(line)) { goto releaseAndExit; }
 							if (std::regex_search(line, matchData, keyphraseRegex)) {
 								highlightMatches(); std::cout << line << std::endl;
-								padding = historyBuffer_lastIndex;
+								padding = HistoryBuffer::buffer_lastIndex;
 								continue;
 							}
 							std::cout << line << std::endl;
@@ -479,29 +496,24 @@ int main(int argc, char** argv) {
 					}
 					continue;
 				}
-				pushToHistoryBuffer(line);
-			LINE_WHILE_END
-		}
-
-		if (flags::allLines) {
-			LINE_WHILE_START
-				if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
-				std::cout << line << std::endl;							// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
+				HistoryBuffer::push(line);
 			LINE_WHILE_END
 		}
 
 		LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } LINE_WHILE_END
 	}
 
-	color::unsafeInitPipedRed();					// If output isn't colored, activate uncolored versions of red and reset.
+	color::unsafeInitPipedRed();																	// If output isn't colored, activate uncolored versions of red and reset.
 	color::unsafeInitPipedReset();
+	
+	if (flags::allLines) { LINE_WHILE_START std::cout << line << std::endl; LINE_WHILE_END }
 
 	if (flags::context) {
 		LINE_WHILE_START
 			if (std::regex_search(line, matchData, keyphraseRegex)) {
-				printHistoryBuffer();
+				HistoryBuffer::print();
 				std::cout << line << std::endl;
-				unsigned int padding = historyBuffer_lastIndex;
+				unsigned int padding = HistoryBuffer::buffer_lastIndex;
 				while (true) {
 #ifdef PLATFORM_WINDOWS
 					if (shouldLoopRun) {
@@ -510,7 +522,7 @@ int main(int argc, char** argv) {
 						if (InputStream::readLine(line)) { goto releaseAndExit; }
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
 							std::cout << line << std::endl;
-							padding = historyBuffer_lastIndex;
+							padding = HistoryBuffer::buffer_lastIndex;
 							continue;
 						}
 						std::cout << line << std::endl;
@@ -524,17 +536,18 @@ int main(int argc, char** argv) {
 				}
 				continue;
 			}
-			pushToHistoryBuffer(line);
+			HistoryBuffer::push(line);
 		LINE_WHILE_END
 	}
 
-	if (flags::allLines) { LINE_WHILE_START std::cout << line << std::endl; LINE_WHILE_END }
 	
 	LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; } LINE_WHILE_END
 
 releaseAndExit:
+	HistoryBuffer::release();
+	InputStream::release();																			// This doesn't do anything on Windows.
 	color::release();
-	InputStream::release();										// This doesn't do anything on Windows.
+	std::cout << "released everything, dying..." << std::endl;
 }
 
 /*
