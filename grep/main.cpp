@@ -53,7 +53,9 @@ const char* helpText = "grep accepts text as input and outputs the lines from th
 					   "arguments:\n" \
 							"\t-c                           -->         be case sensitive when matching\n" \
 							"\t-a                           -->         print all lines from input but still color matches\n" \
-							"\t--context <amount>           -->         print the specified amount of context (in lines) around each matched line\n";
+							"\t-l                           -->         print line numbers\n" \
+							"\t--context <amount>           -->         print the specified amount of context (in lines) around each matched line\n" \
+							"\t--only-line-nums             -->         print only the line numbers, not the actual lines\n";
 
 // Flag to keep track of whether we should color output or not. Can also be used for testing if output is a TTY or not.
 bool isOutputColored;
@@ -148,8 +150,10 @@ void signalHandler(int signum) { shouldLoopRun = false; }
 // Collection of flags. These correspond to command-line flags you can set for the program.
 namespace flags {
 	bool caseSensitive = false;
-	bool context = false;
 	bool allLines = false;
+	bool lineNums = false;
+	bool context = false;
+	bool only_line_nums = false;
 }
 
 class HistoryBuffer {
@@ -205,6 +209,7 @@ void parseFlagGroup(char* arg) {
 		switch (arg[i]) {
 		case 'c': flags::caseSensitive = true; break;
 		case 'a': flags::allLines = true; break;
+		case 'l': flags::lineNums = true; break;
 		case '\0': return;
 		default:
 			initOutputStyling();
@@ -268,6 +273,7 @@ unsigned int parseFlags(int argc, char** argv) {
 					HistoryBuffer::init(historyLength);
 					continue;
 				}
+				if (!strcmp(flagTextStart, "only-line-nums")) { flags::only_line_nums = true; continue; }
 				if (!strcmp(flagTextStart, "help")) { showHelp(); exit(EXIT_SUCCESS); }
 				if (!strcmp(flagTextStart, "h")) { showHelp(); exit(EXIT_SUCCESS); }
 				initOutputStyling();
@@ -336,7 +342,7 @@ public:
 		
 		// Add SIGINT to set of tracked signals.
 		if (sigemptyset(&sigmask) == -1) { goto errorBranch; }
-		if (sigaddset(&sigmask, SIGINT) == -1) { goto errorBranch; }
+		if (sigaddset(&sigmask, SIGINT) == -1) { goto errorBranch; }				// TODO: You should probably also add SIGTERM to tracked signals because thats the one that gets sent on shutdown.
 
 		// Block the set of tracked signals from being handled by default by thread because obviously we're handling them.
 		if (sigprocmask(SIG_BLOCK, &sigmask, nullptr) == -1) { goto errorBranch; }
@@ -442,6 +448,7 @@ void highlightMatches() {																							// I assume this will be inlined
 // Program entry point
 int main(int argc, char** argv) {
 #ifdef PLATFORM_WINDOWS
+	// TODO: Add sigterm to this handler somehow.
 	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
 											// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 #else
@@ -468,9 +475,22 @@ int main(int argc, char** argv) {
 		color::unsafeInitReset();
 		
 		if (flags::allLines) {
+			if (flags::only_line_nums) {
+				size_t lineCounter = 1;
+				LINE_WHILE_START std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END
+			}
+			if (flags::lineNums) {
+				size_t lineCounter = 1;
+				LINE_WHILE_START
+					std::cout << lineCounter;
+					if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
+					std::cout << line << std::endl;														// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
+					lineCounter++;
+				LINE_WHILE_END
+			}
 			LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
-				std::cout << line << std::endl;														// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
+				std::cout << line << std::endl;
 			LINE_WHILE_END
 		}
 
