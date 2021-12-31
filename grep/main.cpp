@@ -194,7 +194,9 @@ public:
 		}
 	}
 
-	static void release() { if (flags::context) { delete[] buffer; } }
+	// TODO: Make another print function which takes the current line number and prints the last line numbers of the previous lines out as well. For the line flags.
+
+	static void release() { if (flags::context) { delete[] buffer; } }			// TODO: Does this flags::context check even make sense? Why would we even init the History buffer if we aren't using context.
 };
 
 std::string* HistoryBuffer::buffer;
@@ -445,6 +447,10 @@ void highlightMatches() {																							// I assume this will be inlined
 #define LINE_WHILE_START MAIN_WHILE { if (InputStream::readLine(line)) { break; }
 #define LINE_WHILE_END line.clear(); } goto releaseAndExit;
 
+// TODO: Learn about SFINAE and std::enable_if.
+
+// TODO: Add -v flag to invert the output of grep.
+
 // Program entry point
 int main(int argc, char** argv) {
 #ifdef PLATFORM_WINDOWS
@@ -474,7 +480,7 @@ int main(int argc, char** argv) {
 		color::unsafeInitRed();
 		color::unsafeInitReset();
 		
-		if (flags::allLines) {
+		if (flags::allLines) {													// TODO: Rely on the optimizer to put if statements outside of the main loop (it definitely will if it can), and consolidate all of this code below into a more compact form.
 			if (flags::only_line_nums) {
 				size_t lineCounter = 1;
 				LINE_WHILE_START std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END
