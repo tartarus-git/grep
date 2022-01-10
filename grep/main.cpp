@@ -156,11 +156,14 @@ namespace flags {
 	bool only_line_nums = false;
 }
 
+size_t lineCounter = 0;
+
 class HistoryBuffer {
 	static std::string* buffer;
 	static unsigned int buffer_len;
 	static unsigned int index;
 	static unsigned int beginIndex;
+	static unsigned int amountFilled;		// TODO: Should I use size_t here?
 
 public:
 	static unsigned int buffer_lastIndex;
@@ -172,6 +175,7 @@ public:
 	}
 
 	static void push(const std::string& line) {
+		if (flags::lineNums || flags::only_line_nums) { amountFilled++; }
 		buffer[index] = line;
 		if (index == beginIndex - 1) {
 			if (beginIndex == buffer_lastIndex) { index++; beginIndex = 0; return; }
@@ -194,9 +198,22 @@ public:
 		}
 	}
 
-	// TODO: Make another print function which takes the current line number and prints the last line numbers of the previous lines out as well. For the line flags.
+	static void printWithLineNums() {
+		size_t currentLineNum = lineCounter - amountFilled;
+		for (unsigned int i = beginIndex; ; ) {
+			if (i = index) { index = beginIndex; amountFilled = 0; return; }
+			std::cout << currentLineNum << ' ' << buffer[i] << std::endl;
+			currentLineNum++;
+			if (i == buffer_lastIndex) { i = 0; continue; } i++;
+		}
+	}
 
-	static void release() { if (flags::context) { delete[] buffer; } }			// TODO: Does this flags::context check even make sense? Why would we even init the History buffer if we aren't using context.
+	static void printOnlyLineNums() {
+		for (unsigned int lineNum = lineCounter - amountFilled; lineNum < lineCounter; lineNum++) { std::cout << lineNum << std::endl; }
+		amountFilled = 0;
+	}
+
+	static void release() { delete[] buffer; }
 };
 
 std::string* HistoryBuffer::buffer;
@@ -475,76 +492,33 @@ int main(int argc, char** argv) {
 
 	manageArgs(argc, argv);					// Manage the arguments so that we don't have to worry about it here.
 
-	// Branch based on if the output is colored or not. This is so that we don't check it over and over again inside the loop, which is terrible.
-	if (isOutputColored) {					// If output is colored, activate colors and do the more complex matching algorithm
-		color::unsafeInitRed();
-		color::unsafeInitReset();
-		
-		if (flags::allLines) {													// TODO: Rely on the optimizer to put if statements outside of the main loop (it definitely will if it can), and consolidate all of this code below into a more compact form.
-			if (flags::only_line_nums) {
-				size_t lineCounter = 1;
-				LINE_WHILE_START std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END
-			}
-			if (flags::lineNums) {
-				size_t lineCounter = 1;
-				LINE_WHILE_START
-					std::cout << lineCounter;
-					if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
-					std::cout << line << std::endl;														// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
-					lineCounter++;
-				LINE_WHILE_END
-			}
-			LINE_WHILE_START
-				if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
-				std::cout << line << std::endl;
-			LINE_WHILE_END
-		}
-
-		if (flags::context) {
-			LINE_WHILE_START
-				if (std::regex_search(line, matchData, keyphraseRegex)) {
-					HistoryBuffer::print();
-					highlightMatches(); std::cout << line << std::endl;
-					unsigned int padding = HistoryBuffer::buffer_lastIndex;
-					while (true) {																	// History has already been printed, now we have to print the future padding.
-#ifdef PLATFORM_WINDOWS
-						if (shouldLoopRun) {
-#endif
-							line.clear();
-							if (InputStream::readLine(line)) { goto releaseAndExit; }
-							if (std::regex_search(line, matchData, keyphraseRegex)) {
-								highlightMatches(); std::cout << line << std::endl;
-								padding = HistoryBuffer::buffer_lastIndex;
-								continue;
-							}
-							std::cout << line << std::endl;
-							if (padding == 1) { line.clear(); break; }
-							padding--;
-							continue;
-#ifdef PLATFORM_WINDOWS
-						}
-						goto releaseAndExit;
-#endif
-					}
-					continue;
-				}
-				HistoryBuffer::push(line);
-			LINE_WHILE_END
-		}
-
-		LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } LINE_WHILE_END
-	}
-
-	color::unsafeInitPipedRed();																	// If output isn't colored, activate uncolored versions of red and reset.
-	color::unsafeInitPipedReset();
+	// NOTE: The following has a lot of seemingly inefficient if statements. The reason I haven't moved them outside of the loop is because
+	// then I would have to write the same code so many times (especially with a growing number of cmdline flags). Instead,
+	// we're relying on the compiler to optimize all of the following and generate really long code where multiple loops are on multiple different branches.
 	
-	if (flags::allLines) { LINE_WHILE_START std::cout << line << std::endl; LINE_WHILE_END }
+	color::initRed();
+	color::initReset();
 
-	if (flags::context) {
-		LINE_WHILE_START
-			if (std::regex_search(line, matchData, keyphraseRegex)) {
-				HistoryBuffer::print();
-				std::cout << line << std::endl;
+#ifdef PLATFORM_WINDOWS
+	while (shouldLoopRun) {
+#else
+	while (true) {
+#endif
+		if (InputStream::readLine(line)) { break; }
+		if (!isOutputColored && flags::allLines) {
+			if (flags::only_line_nums) { std::cout << lineCounter << std::endl; lineCounter++; goto nextRound; }
+			if (flags::lineNums) { std::cout << lineCounter << ' ' << std::endl; lineCounter++; }
+			std::cout << line << std::endl; goto nextRound;
+		}
+		if (std::regex_search(line, matchData, keyphraseRegex)) {
+			if (flags::context) {
+				if (flags::only_line_nums) { HistoryBuffer::printOnlyLineNums(); }
+				else if (flags::lineNums) { HistoryBuffer::printWithLineNums(); }
+				else { HistoryBuffer::print(); }
+			}
+			if (isOutputColored) { highlightMatches(); }
+			std::cout << line << std::endl;
+			if (flags::context) {
 				unsigned int padding = HistoryBuffer::buffer_lastIndex;
 				while (true) {
 #ifdef PLATFORM_WINDOWS
@@ -553,7 +527,7 @@ int main(int argc, char** argv) {
 						line.clear();
 						if (InputStream::readLine(line)) { goto releaseAndExit; }
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
-							std::cout << line << std::endl;
+							if (isOutputColored) { highlightMatches(); } std::cout << line << std::endl;
 							padding = HistoryBuffer::buffer_lastIndex;
 							continue;
 						}
@@ -566,17 +540,16 @@ int main(int argc, char** argv) {
 					goto releaseAndExit;
 #endif
 				}
-				continue;
 			}
-			HistoryBuffer::push(line);
-		LINE_WHILE_END
+			goto nextRound;
+		}
+		if (flags::context) { HistoryBuffer::push(line); }
+	nextRound:
+		line.clear();
 	}
 
-	
-	LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; } LINE_WHILE_END
-
 releaseAndExit:
-	HistoryBuffer::release();
+	if (flags::context) { HistoryBuffer::release(); }
 	InputStream::release();																			// This doesn't do anything on Windows.
 	color::release();
 }
