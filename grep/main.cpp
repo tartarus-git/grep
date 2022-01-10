@@ -152,6 +152,7 @@ namespace flags {
 	bool caseSensitive = false;
 	bool allLines = false;
 	bool lineNums = false;
+	bool inverted = false;
 	bool context = false;
 	bool only_line_nums = false;
 }
@@ -163,19 +164,18 @@ class HistoryBuffer {
 	static unsigned int buffer_len;
 	static unsigned int index;
 	static unsigned int beginIndex;
-	static unsigned int amountFilled;		// TODO: Should I use size_t here?
 
 public:
 	static unsigned int buffer_lastIndex;
+	static unsigned int amountFilled;		// TODO: Should I use size_t for all these member variables?
 
-	static void init(int historyLength) {
-		buffer_lastIndex = historyLength;
-		buffer_len = historyLength + 1;
+	static void init() {
+		buffer_len = buffer_lastIndex + 1;
 		buffer = new std::string[buffer_len];
 	}
 
 	static void push(const std::string& line) {
-		if (flags::lineNums || flags::only_line_nums) { amountFilled++; }
+		if (flags::only_line_nums || flags::lineNums) { amountFilled++; }
 		buffer[index] = line;
 		if (index == beginIndex - 1) {
 			if (beginIndex == buffer_lastIndex) { index++; beginIndex = 0; return; }
@@ -189,9 +189,12 @@ public:
 		index++;
 	}
 
+	static void purge() { index = beginIndex; }
+	static void purgeWithLineNums() { index = beginIndex; amountFilled = 0; }
+
 	static void print() {
 		for (unsigned int i = beginIndex; ; ) {
-			if (i == index) { index = beginIndex; return; }
+			if (i == index) { purge(); return; }
 			std::cout << buffer[i] << std::endl;
 			if (i == buffer_lastIndex) { i = 0; continue; }
 			i++;
@@ -201,7 +204,7 @@ public:
 	static void printWithLineNums() {
 		size_t currentLineNum = lineCounter - amountFilled;
 		for (unsigned int i = beginIndex; ; ) {
-			if (i = index) { index = beginIndex; amountFilled = 0; return; }
+			if (i = index) { purgeWithLineNums(); return; }
 			std::cout << currentLineNum << ' ' << buffer[i] << std::endl;
 			currentLineNum++;
 			if (i == buffer_lastIndex) { i = 0; continue; } i++;
@@ -210,8 +213,10 @@ public:
 
 	static void printOnlyLineNums() {
 		for (unsigned int lineNum = lineCounter - amountFilled; lineNum < lineCounter; lineNum++) { std::cout << lineNum << std::endl; }
-		amountFilled = 0;
+		purgeWithLineNums();
 	}
+
+	static std::string& peekOldest() { return buffer[beginIndex]; }
 
 	static void release() { delete[] buffer; }
 };
@@ -229,6 +234,7 @@ void parseFlagGroup(char* arg) {
 		case 'c': flags::caseSensitive = true; break;
 		case 'a': flags::allLines = true; break;
 		case 'l': flags::lineNums = true; break;
+		case 'v': flags::inverted = true; break;
 		case '\0': return;
 		default:
 			initOutputStyling();
@@ -272,6 +278,7 @@ void showHelp() { if (isOutputColored) { std::cout << helpText << std::endl; } }
 
 // Parse flags at the argument level. Calls parseFlagGroup if it encounters flag groups and handles word flags (those with -- in front) separately.
 unsigned int parseFlags(int argc, char** argv) {
+	unsigned int historyLength;
 	for (int i = 1; i < argc; i++) {
 		const char* arg = argv[i];
 		if (arg[0] == '-') {
@@ -286,10 +293,9 @@ unsigned int parseFlags(int argc, char** argv) {
 						releaseOutputStyling();
 						exit(EXIT_SUCCESS);
 					}
-					unsigned int historyLength = parseUInt(argv[i]);
-					if (historyLength == 0) { continue; }															// Context value 0 is the same as no context, so don't bother setting context up.
+					HistoryBuffer::buffer_lastIndex = parseUInt(argv[i]);
+					if (HistoryBuffer::buffer_lastIndex == 0) { continue; }															// Context value 0 is the same as no context, so don't bother setting context up.
 					flags::context = true;
-					HistoryBuffer::init(historyLength);
 					continue;
 				}
 				if (!strcmp(flagTextStart, "only-line-nums")) { flags::only_line_nums = true; continue; }
@@ -495,6 +501,8 @@ int main(int argc, char** argv) {
 	// NOTE: The following has a lot of seemingly inefficient if statements. The reason I haven't moved them outside of the loop is because
 	// then I would have to write the same code so many times (especially with a growing number of cmdline flags). Instead,
 	// we're relying on the compiler to optimize all of the following and generate really long code where multiple loops are on multiple different branches.
+
+	if (flags::context || flags::inverted) { HistoryBuffer::init(); }
 	
 	color::initRed();
 	color::initReset();
@@ -506,15 +514,28 @@ int main(int argc, char** argv) {
 #endif
 		if (InputStream::readLine(line)) { break; }
 		if (!isOutputColored && flags::allLines) {
-			if (flags::only_line_nums) { std::cout << lineCounter << std::endl; lineCounter++; goto nextRound; }
-			if (flags::lineNums) { std::cout << lineCounter << ' ' << std::endl; lineCounter++; }
+			if (flags::only_line_nums) { std::cout << lineCounter << std::endl; goto nextRound; }
+			if (flags::lineNums) { std::cout << lineCounter << ' ' << std::endl; }
 			std::cout << line << std::endl; goto nextRound;
 		}
 		if (std::regex_search(line, matchData, keyphraseRegex)) {
 			if (flags::context) {
-				if (flags::only_line_nums) { HistoryBuffer::printOnlyLineNums(); }
+				if (flags::inverted) {
+					if (flags::only_line_nums || flags::lineNums) { lineCounter += HistoryBuffer::amountFilled + HistoryBuffer::buffer_lastIndex; HistoryBuffer::purgeWithLineNums(); }
+					else { HistoryBuffer::purge(); }
+					for (int i = 0; i < HistoryBuffer::buffer_lastIndex; i++) {
+						line.clear();		// TODO: Is the clear necessary here?
+						if (InputStream::readLine(line)) { goto releaseAndExit; }
+					}
+					line.clear();
+					continue;
+				}
+				else if (flags::only_line_nums) { HistoryBuffer::printOnlyLineNums(); }
 				else if (flags::lineNums) { HistoryBuffer::printWithLineNums(); }
 				else { HistoryBuffer::print(); }
+			}
+			else {
+				if (flags::inverted) { goto nextRound; }
 			}
 			if (isOutputColored) { highlightMatches(); }
 			std::cout << line << std::endl;
@@ -543,13 +564,28 @@ int main(int argc, char** argv) {
 			}
 			goto nextRound;
 		}
-		if (flags::context) { HistoryBuffer::push(line); }
+		if (flags::context) {
+			HistoryBuffer::push(line);
+			if (flags::inverted) {
+				if (flags::only_line_nums) { std::cout << lineCounter << std::endl; goto nextRound; }
+				if (flags::lineNums) { std::cout << lineCounter << ' ' << HistoryBuffer::peekOldest() << std::endl; goto nextRound; }
+				std::cout << HistoryBuffer::peekOldest() << std::endl; goto nextRound;
+			}
+		}
+		else {
+			if (flags::inverted) {
+				if (flags::only_line_nums) { std::cout << lineCounter << std::endl; goto nextRound; }	// TODO: The goto nextRound and the goto nextRound somewhere above where we do the same thing for lines with regex hits can be optimized out by you. Replace them with source code because makes more sense. Or at least think about it.
+				if (flags::lineNums) { std::cout << lineCounter << ' ' << line << std::endl; goto nextRound; }
+				std::cout << line << std::endl;
+			}
+		}
 	nextRound:
 		line.clear();
+		if (flags::only_line_nums || flags::lineNums) { lineCounter++; }
 	}
 
 releaseAndExit:
-	if (flags::context) { HistoryBuffer::release(); }
+	if (flags::context || flags::inverted) { HistoryBuffer::release(); }
 	InputStream::release();																			// This doesn't do anything on Windows.
 	color::release();
 }
