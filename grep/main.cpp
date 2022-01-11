@@ -47,13 +47,14 @@
 
 const char* helpText = "grep accepts text as input and outputs the lines from the input that have the specified keyphrase in them\n" \
 					   "\n" \
-					   "usage: grep [-ca] [--context <amount>] <regex keyphrase>\n" \
+					   "usage: grep [-calv] [--context <amount> || --only-line-nums] <regex keyphrase>\n" \
 					   "       grep <--help|--h>            -->            shows help text\n" \
 					   "\n" \
 					   "arguments:\n" \
 							"\t-c                           -->         be case sensitive when matching\n" \
 							"\t-a                           -->         print all lines from input but still color matches\n" \
 							"\t-l                           -->         print line numbers\n" \
+							"\t-v                           -->         invert output - print lines that would normally be omitted and omit lines that would normally be printed\n" \
 							"\t--context <amount>           -->         print the specified amount of context (in lines) around each matched line\n" \
 							"\t--only-line-nums             -->         print only the line numbers, not the actual lines\n";
 
@@ -142,6 +143,7 @@ void releaseOutputStyling() {
 	color::release();
 }
 
+// TODO: Here is another reminder to handle SIGTERM on all platforms as well as SIGINT.
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
 bool shouldLoopRun = true;
 void signalHandler(int signum) { shouldLoopRun = false; }
@@ -152,13 +154,16 @@ namespace flags {
 	bool caseSensitive = false;
 	bool allLines = false;
 	bool lineNums = false;
+	bool inverted = false;
 	bool context = false;
 	bool only_line_nums = false;
 }
 
+size_t lineCounter;
+
 class HistoryBuffer {
 	static std::string* buffer;
-	static unsigned int buffer_len;
+	static unsigned int buffer_len;			// TODO: Would be more appropriate to use size_t here would it not?
 	static unsigned int index;
 	static unsigned int beginIndex;
 
@@ -185,18 +190,38 @@ public:
 		index++;
 	}
 
+	static void purge() { index = beginIndex; }
+
 	static void print() {
 		for (unsigned int i = beginIndex; ; ) {
-			if (i == index) { index = beginIndex; return; }
+			if (i == index) { purge(); return; }
 			std::cout << buffer[i] << std::endl;
-			if (i == buffer_lastIndex) { i = 0; continue; }
-			i++;
+			if (i == buffer_lastIndex) { i = 0; continue; } i++;
 		}
 	}
 
-	// TODO: Make another print function which takes the current line number and prints the last line numbers of the previous lines out as well. For the line flags.
+	static size_t getAmountFilled() { return index > beginIndex ? index - beginIndex : buffer_len - beginIndex + index; }
 
-	static void release() { if (flags::context) { delete[] buffer; } }			// TODO: Does this flags::context check even make sense? Why would we even init the History buffer if we aren't using context.
+	static void printLinesWithLineNums() {
+		if (index == beginIndex) { return; }
+		size_t currentLineNum = lineCounter - getAmountFilled();
+		std::cout << currentLineNum << ' ' << buffer[beginIndex] << std::endl;
+		currentLineNum++;
+		// TODO: Look up order of operations for ternary expressions again and make sure the below works great.
+		for (size_t i = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1); ; ) {
+			if (i == index) { purge(); return; }
+			std::cout << currentLineNum << ' ' << buffer[i] << std::endl;
+			currentLineNum++;
+			if (i == buffer_lastIndex) { i = 0; continue; } i++;
+		}
+	}
+
+	static void printLineNums() {
+		for (size_t lineNum = lineCounter - getAmountFilled(); lineNum < lineCounter; lineNum++) { std::cout << lineNum << std::endl; }
+		purge();
+	}
+
+	static void release() { delete[] buffer; }
 };
 
 std::string* HistoryBuffer::buffer;
