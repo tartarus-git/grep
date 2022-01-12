@@ -176,8 +176,7 @@ public:
 		buffer = new std::string[buffer_len];
 	}
 
-	static void push(const std::string& line) {
-		buffer[index] = line;
+	static void pushLine() {
 		if (index == beginIndex - 1) {
 			if (beginIndex == buffer_lastIndex) { index++; beginIndex = 0; return; }
 			index++; beginIndex++; return;
@@ -190,32 +189,32 @@ public:
 		index++;
 	}
 
+	static void push(const std::string& line) { buffer[index] = line; pushLine(); }
+
 	static void purge() { index = beginIndex; }
 
 	static void print() {
-		for (unsigned int i = beginIndex; ; ) {
-			if (i == index) { purge(); return; }
-			std::cout << buffer[i] << std::endl;
-			if (i == buffer_lastIndex) { i = 0; continue; } i++;
+		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) {
+			std::cout << buffer[beginIndex] << std::endl;
 		}
 	}
 
+	// NOTE: We could store the amount filled and edit the variable with every call to push(), but I doubt that would be efficient since push is called so many more times than print is (at least normally).
+	// Doing that would cause amountFilled to be added to over and over with little return on the investment. That's why we're just calculating amountFilled every time we need it, that way push() doesn't have to waste it's time incrementing anything.
 	static size_t getAmountFilled() { return index > beginIndex ? index - beginIndex : buffer_len - beginIndex + index; }
 
 	static void printLinesWithLineNums() {
 		if (index == beginIndex) { return; }
-		size_t currentLineNum = lineCounter - getAmountFilled();
-		std::cout << currentLineNum << ' ' << buffer[beginIndex] << std::endl;
-		currentLineNum++;
+		lineCounter -= getAmountFilled();
+		std::cout << lineCounter << ' ' << buffer[beginIndex] << std::endl;
+		lineCounter++;
+		beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1);
 		// TODO: Look up order of operations for ternary expressions again and make sure the below works great.
-		for (size_t i = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1); ; ) {
-			if (i == index) { purge(); return; }
-			std::cout << currentLineNum << ' ' << buffer[i] << std::endl;
-			currentLineNum++;
-			if (i == buffer_lastIndex) { i = 0; continue; } i++;
+		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) {
+			std::cout << lineCounter << ' ' << buffer[beginIndex] << std::endl;
 		}
 	}
-
+	// TODO: increase line counter here in these functions.
 	static void printLineNums() {
 		for (size_t lineNum = lineCounter - getAmountFilled(); lineNum < lineCounter; lineNum++) { std::cout << lineNum << std::endl; }
 		purge();
@@ -237,6 +236,7 @@ void parseFlagGroup(char* arg) {
 		case 'c': flags::caseSensitive = true; break;
 		case 'a': flags::allLines = true; break;
 		case 'l': flags::lineNums = true; break;
+		case 'v': flags::inverted = true; break;
 		case '\0': return;
 		default:
 			initOutputStyling();
@@ -474,8 +474,6 @@ void highlightMatches() {																							// I assume this will be inlined
 
 // TODO: Learn about SFINAE and std::enable_if.
 
-// TODO: Add -v flag to invert the output of grep.
-
 // Program entry point
 int main(int argc, char** argv) {
 #ifdef PLATFORM_WINDOWS
@@ -502,18 +500,19 @@ int main(int argc, char** argv) {
 
 	// Branch based on if the output is colored or not. This is so that we don't check it over and over again inside the loop, which is terrible.
 	if (isOutputColored) {					// If output is colored, activate colors and do the more complex matching algorithm
-		color::unsafeInitRed();
-		color::unsafeInitReset();
 		
-		if (flags::allLines) {													// TODO: Rely on the optimizer to put if statements outside of the main loop (it definitely will if it can), and consolidate all of this code below into a more compact form.
+		if (flags::allLines) {
+			if (flags::inverted) { InputStream::release(); return 0; }			// TODO: You could avoid doing this if you initialized after this branch. Worry about that once the program is more finished.
+			color::unsafeInitRed();
+			color::unsafeInitReset();
 			if (flags::only_line_nums) {
-				size_t lineCounter = 1;
+				lineCounter = 1;			// TODO: Should we just set the global lineCounter var to this from the start. Might be better for program run time because of BSS segment and automatic data filling.
 				LINE_WHILE_START std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END
 			}
 			if (flags::lineNums) {
-				size_t lineCounter = 1;
+				lineCounter = 1;
 				LINE_WHILE_START
-					std::cout << lineCounter;
+					std::cout << lineCounter << ' ';
 					if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
 					std::cout << line << std::endl;														// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
 					lineCounter++;
@@ -525,7 +524,78 @@ int main(int argc, char** argv) {
 			LINE_WHILE_END
 		}
 
+
+		// TODO: Go through the whole program and sort nested if's by probability of being hit. If statements that just protect against dumb series' of
+		// command line flags should be at bottom for example.
 		if (flags::context) {
+			if (flags::allLines) {
+				if (flags::inverted) { InputStream::release(); return 0; }
+				color::unsafeInitRed();
+				color::unsafeInitReset();
+				if (flags::only_line_nums) {
+					lineCounter = 1;
+					LINE_WHILE_START
+						// TODO: Make sure you understand the difference between regex search and match. Would match be better here?
+						if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << std::endl; lineCounter++; continue; }
+						std::cout << lineCounter << std::endl;
+						lineCounter++;
+					LINE_WHILE_END
+				}
+				if (flags::lineNums) {
+					lineCounter = 1;
+					LINE_WHILE_START
+						std::cout << lineCounter << ' ';
+						if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
+						std::cout << line << std::endl;
+					LINE_WHILE_END
+				}
+				LINE_WHILE_START
+					if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
+					std::cout << line << std::endl;
+				LINE_WHILE_END
+			}
+			color::unsafeInitRed();
+			color::unsafeInitReset();
+			if (flags::only_line_nums) {
+				lineCounter = 1;
+				LINE_WHILE_START
+					if (std::regex_search(line, matchData, keyphraseRegex)) {
+						HistoryBuffer::printLineNums();
+						std::cout << lineCounter << std::endl;
+						lineCounter++;
+						for (size_t padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+#ifdef PLATFORM_WINDOWS
+							if (shouldLoopRun) {
+#endif
+								line.clear();			// TODO: Do we need this here in this specific case?
+								if (InputStream::readLine(line)) { goto releaseAndExit; }
+								if (std::regex_search(line, matchData, keyphraseRegex)) {
+									std::cout << lineCounter << std::endl;
+									padding = HistoryBuffer::buffer_lastIndex;
+									continue;
+								}
+								lineCounter++;			// TODO: Is there a way to avoid adding to two seperate things. Can we base loop off of lineCounter?
+								padding--;
+								continue;
+#ifdef PLATFORM_WINDOWS
+							}
+							goto releaseAndExit;
+#endif
+						}
+						continue;
+					}
+					HistoryBuffer::pushLine();
+					lineCounter++;
+				LINE_WHILE_END
+			}
+			if (flags::lineNums) {
+				lineCounter = 1;
+				LINE_WHILE_START
+					if (std::regex_search(line, matchData, keyphraseRegex)) {
+						HistoryBuffer::printLinesWithLineNums();
+						std::cout << lineCounter << ' '; highlightMatches(); std::cout << line << std::endl;
+					}
+			}
 			LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
 					HistoryBuffer::print();
@@ -556,6 +626,9 @@ int main(int argc, char** argv) {
 				HistoryBuffer::push(line);
 			LINE_WHILE_END
 		}
+
+		color::unsafeInitRed();
+		color::unsafeInitReset();
 
 		LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } LINE_WHILE_END
 	}
