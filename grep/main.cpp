@@ -64,37 +64,16 @@ bool isOutputColored;
 // Output coloring.
 namespace color {
 	char* red;
-	void unsafeInitRed() {
-		red = new char[ANSI_ESC_CODE_MIN_SIZE + 2 + 1];
-		memcpy(red, ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 2 + 1);
-	}
-	void unsafeInitPipedRed() {
-		red = new char;
-		*red = '\0';
-	}
-	void initRed() {
-		if (isOutputColored) { unsafeInitRed(); return; }
-		unsafeInitPipedRed();
-	}
+	void unsafeInitRed() { red = new char[ANSI_ESC_CODE_MIN_SIZE + 2 + 1]; memcpy(red, ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 2 + 1); }
+	void unsafeInitPipedRed() { red = new char; *red = '\0'; }
+	void initRed() { if (isOutputColored) { unsafeInitRed(); return; } unsafeInitPipedRed(); }
 
 	char* reset;
-	void unsafeInitReset() {
-		reset = new char[ANSI_ESC_CODE_MIN_SIZE + 1 + 1];
-		memcpy(reset, ANSI_ESC_CODE_PREFIX "0" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 1 + 1);
-	}
-	void unsafeInitPipedReset() {
-		reset = new char;
-		*reset = '\0';
-	}
-	void initReset() {
-		if (isOutputColored) { unsafeInitReset(); return; }
-		unsafeInitPipedReset();
-	}
+	void unsafeInitReset() { reset = new char[ANSI_ESC_CODE_MIN_SIZE + 1 + 1]; memcpy(reset, ANSI_ESC_CODE_PREFIX "0" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 1 + 1); }
+	void unsafeInitPipedReset() { reset = new char; *reset = '\0'; }
+	void initReset() { if (isOutputColored) { unsafeInitReset(); return; } unsafeInitPipedReset(); }
 
-	void release() {
-		delete[] color::red;
-		delete[] color::reset;
-	}
+	void release() { delete[] color::red; delete[] color::reset; }
 }
 
 // Output formatting.
@@ -143,7 +122,6 @@ void releaseOutputStyling() {
 	color::release();
 }
 
-// TODO: Here is another reminder to handle SIGTERM on all platforms as well as SIGINT.
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
 bool shouldLoopRun = true;
 void signalHandler(int signum) { shouldLoopRun = false; }
@@ -159,66 +137,70 @@ namespace flags {
 	bool only_line_nums = false;
 }
 
-size_t lineCounter;
+size_t lineCounter = 1;
 
 class HistoryBuffer {
 	static std::string* buffer;
-	static unsigned int buffer_len;			// TODO: Would be more appropriate to use size_t here would it not?
+	static unsigned int buffer_len;
 	static unsigned int index;
 	static unsigned int beginIndex;
 
 public:
 	static unsigned int buffer_lastIndex;
+	static unsigned int amountFilled;
 
-	static void init(int historyLength) {
-		buffer_lastIndex = historyLength;
-		buffer_len = historyLength + 1;
+	static void incrementAmountFilled() { if (amountFilled != buffer_lastIndex) { amountFilled++; } }
+
+	static void purgeAmountFilled() { amountFilled = 0; }
+
+	static void init() {
+		buffer_len = buffer_lastIndex + 1;
 		buffer = new std::string[buffer_len];
 	}
 
-	static void pushLine() {
+	static void incrementHead() {
 		if (index == beginIndex - 1) {
 			if (beginIndex == buffer_lastIndex) { index++; beginIndex = 0; return; }
 			index++; beginIndex++; return;
 		}
-		if (index == buffer_lastIndex) {
-			if (beginIndex == 0) { beginIndex = 1; }
-			index = 0;
-			return;
-		}
+		if (index == buffer_lastIndex) { if (beginIndex == 0) { beginIndex = 1; } index = 0; return; }
 		index++;
 	}
 
-	static void push(const std::string& line) { buffer[index] = line; pushLine(); }
+	static void push(const std::string& line) { buffer[index] = line; incrementHead(); }
+
+	static void incrementHeadWithAmountInc() { if (amountFilled != buffer_lastIndex) { amountFilled++; } incrementHead(); }
+
+	static void pushWithAmountInc(const std::string& line) { buffer[index] = line; incrementHeadWithAmountInc(); }
 
 	static void purge() { index = beginIndex; }
 
-	static void print() {
-		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) {
-			std::cout << buffer[beginIndex] << std::endl;
-		}
-	}
+	static void purgeWithAmountSet() { purge(); amountFilled = 0; }
+
+	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout << buffer[beginIndex] << std::endl; } }
 
 	// NOTE: We could store the amount filled and edit the variable with every call to push(), but I doubt that would be efficient since push is called so many more times than print is (at least normally).
 	// Doing that would cause amountFilled to be added to over and over with little return on the investment. That's why we're just calculating amountFilled every time we need it, that way push() doesn't have to waste it's time incrementing anything.
-	static size_t getAmountFilled() { return index > beginIndex ? index - beginIndex : buffer_len - beginIndex + index; }
+	// NOTE: The exceptions to that rule are the peek functions. They're used for flags::inverted, where it's reasonable to cache amountFilled, so we do it there. Not for normal prints though.
+	// NOTE: Another exception to that rule is flags::only_line_nums. There, the circular buffer isn't used and amountFilled is also the most efficient way of handling things. This is the case for printLineNums() and a couple functions at the top of the class.
+	static unsigned int calculateAmountFilled() { return index > beginIndex ? index - beginIndex : buffer_len - beginIndex + index; }
 
 	static void printLinesWithLineNums() {
 		if (index == beginIndex) { return; }
-		lineCounter -= getAmountFilled();
+		lineCounter -= calculateAmountFilled();
 		std::cout << lineCounter << ' ' << buffer[beginIndex] << std::endl;
 		lineCounter++;
 		beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1);
-		// TODO: Look up order of operations for ternary expressions again and make sure the below works great.
 		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) {
 			std::cout << lineCounter << ' ' << buffer[beginIndex] << std::endl;
 		}
 	}
-	// TODO: increase line counter here in these functions.
-	static void printLineNums() {
-		for (size_t lineNum = lineCounter - getAmountFilled(); lineNum < lineCounter; lineNum++) { std::cout << lineNum << std::endl; }
-		purge();
-	}
+
+	static void printLineNums() { for (amountFilled = lineCounter - amountFilled; amountFilled < lineCounter; amountFilled++) { std::cout << amountFilled << std::endl; } purgeAmountFilled(); }
+
+	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }
+
+	static bool peekSafestLineNum(size_t& safestNum) { if (amountFilled == buffer_lastIndex) { safestNum = lineCounter - buffer_lastIndex; return true; } return false; }
 
 	static void release() { delete[] buffer; }
 };
@@ -228,6 +210,7 @@ unsigned int HistoryBuffer::buffer_len;
 unsigned int HistoryBuffer::index = 0;
 unsigned int HistoryBuffer::beginIndex = 0;
 unsigned int HistoryBuffer::buffer_lastIndex;
+unsigned int HistoryBuffer::amountFilled = 0;
 
 // Parse a single flag group. A flag group is made out of a bunch of single letter flags.
 void parseFlagGroup(char* arg) {
@@ -294,10 +277,9 @@ unsigned int parseFlags(int argc, char** argv) {
 						releaseOutputStyling();
 						exit(EXIT_SUCCESS);
 					}
-					unsigned int historyLength = parseUInt(argv[i]);
-					if (historyLength == 0) { continue; }															// Context value 0 is the same as no context, so don't bother setting context up.
+					HistoryBuffer::buffer_lastIndex = parseUInt(argv[i]);
+					if (HistoryBuffer::buffer_lastIndex == 0) { continue; }															// Context value 0 is the same as no context, so don't bother setting context up.
 					flags::context = true;
-					HistoryBuffer::init(historyLength);
 					continue;
 				}
 				if (!strcmp(flagTextStart, "only-line-nums")) { flags::only_line_nums = true; continue; }
@@ -311,6 +293,7 @@ unsigned int parseFlags(int argc, char** argv) {
 			parseFlagGroup(argv[i] + 1);
 			continue;
 		}
+		if (flags::context && !flags::only_line_nums) { HistoryBuffer::init(); }
 		return i;																									// Return index of first arg that isn't flag arg. Helps calling code parse args.
 	}
 	return argc;																									// No non-flag argument was found. Return argc because it works nicely with calling code.
@@ -367,9 +350,10 @@ public:
 	static void init() {
 		buffer = new char[bufferSize];																				// Initialize buffer with the starting amount of RAM space.
 		
-		// Add SIGINT to set of tracked signals.
+		// Add SIGINT and SIGTERM to set of tracked signals.
 		if (sigemptyset(&sigmask) == -1) { goto errorBranch; }
-		if (sigaddset(&sigmask, SIGINT) == -1) { goto errorBranch; }				// TODO: You should probably also add SIGTERM to tracked signals because thats the one that gets sent on shutdown.
+		if (sigaddset(&sigmask, SIGINT) == -1) { goto errorBranch; }
+		if (sigaddset(&sigmask, SIGTERM) == -1) { goto errorBranch; }
 
 		// Block the set of tracked signals from being handled by default by thread because obviously we're handling them.
 		if (sigprocmask(SIG_BLOCK, &sigmask, nullptr) == -1) { goto errorBranch; }
@@ -382,6 +366,39 @@ public:
 		}
 
 errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now unused entry in fds because some error prevented us from setting it up correctly.
+	}
+
+	static bool refillBuffer() {
+		// When no more data left in buffer, try get more.
+		if (poll(fds, 2, -1) == -1) {																			// Block until we either get some input on stdin or get a SIGINT.
+			format::initError();
+			format::initEndl();
+			std::cout << format::error << "failed to poll stdin and SIGINT" << format::endl;
+			format::release();
+			return true;
+		}
+
+		if (fds[1].revents) { return true; }																	// Signal EOF if we got a SIGINT.
+
+		bytesReceived = read(STDIN_FILENO, buffer, bufferSize);													// Read as much as we can fit into the buffer.
+
+		if (bytesReceived == 0) { return true; }																// In case of actual EOF, signal EOF.
+		if (bytesReceived == -1) {																				// In case of error, log and signal EOF.
+			format::initError();																				// Assumes the colors are already set up because this is only triggered inside the main loop.
+			format::initEndl();
+			std::cout << format::error << "failed to read from stdin" << format::endl;
+			format::release();
+			return true;
+
+		}
+		bytesRead = 0;																							// If new data is read, the read head needs to be reset to the beginning of the buffer.
+
+		if (bytesReceived == bufferSize) {																		// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
+			size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
+			char* newBuffer = (char*)realloc(buffer, newBufferSize);
+			if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
+		}
+		return false;
 	}
 #endif
 
@@ -397,43 +414,31 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 				if (character == '\n') { bytesRead += 1; return false; }
 				line += character;
 			}
-
-			// When no more data left in buffer, try get more.
-			if (poll(fds, 2, -1) == -1) {																			// Block until we either get some input on stdin or get a SIGINT.
-				format::initError();
-				format::initEndl();
-				std::cout << format::error << "failed to poll stdin and SIGINT" << format::endl;
-				format::release();
-				return true;
-			}
-
-			if (fds[1].revents) { return true; }																	// Signal EOF if we got a SIGINT.
-
-			bytesReceived = read(STDIN_FILENO, buffer, bufferSize);													// Read as much as we can fit into the buffer.
-
-			if (bytesReceived == 0) { return true; }																// In case of actual EOF, signal EOF.
-			if (bytesReceived == -1) {																				// In case of error, log and signal EOF.
-				format::initError();																				// Assumes the colors are already set up because this is only triggered inside the main loop.
-				format::initEndl();
-				std::cout << format::error << "failed to read from stdin" << format::endl;
-				format::release();
-				return true;
-
-			}
-			bytesRead = 0;																							// If new data is read, the read head needs to be reset to the beginning of the buffer.
-
-			if (bytesReceived == bufferSize) {																		// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
-				size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
-				char* newBuffer = (char*)realloc(buffer, newBufferSize);
-				if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
-			}
+			if (refillBuffer()) { return true; }
 		}
 #endif
 	}
 
+	static bool discardLine() {
+		// TODO: You should probably return false on failure instead of true, makes more sense and probably doesn't damage efficiency.
 #ifdef PLATFORM_WINDOWS
-	static void release() { }
+		char character;
+		while (true) {			// TODO: Should I put a shouldLoopRun here? Think about it carefully.
+			if (fread(&character, sizeof(char), 1, stdin)) { if (character == '\n') { return false; } } return true;
+			// TODO: when fread returns a different number than count, thats supposed to signify an error or an EOF, says docs. That doesn't make sense though since that happens regularly with console input and it definitely isn't reported as an EOF. Does that mean that it gets reported as error? Would that interfere with our detection of EOF or error?
+			// TODO: Test all these things to make sure that the function can be used for our case.
+		}
 #else
+		while (true) {
+			for (; bytesRead < bytesReceived; bytesRead++) {														// Read all the data in the buffer.
+				if (buffer[bytesRead] == '\n') { bytesRead += 1; return false; }
+			}
+			if (refillBuffer()) { return true; }
+		}
+#endif
+	}
+
+#ifndef PLATFORM_WINDOWS
 	static void release() { delete[] buffer; }
 #endif
 };
@@ -466,22 +471,44 @@ void highlightMatches() {																							// I assume this will be inlined
 #ifdef PLATFORM_WINDOWS
 #define MAIN_WHILE while (shouldLoopRun)
 #else
-#define MAIN_WHILE while (true)
+#define MAIN_WHILE InputStream::init; while (true)
 #endif
 
 #define LINE_WHILE_START MAIN_WHILE { if (InputStream::readLine(line)) { break; }
-#define LINE_WHILE_END line.clear(); } goto releaseAndExit;
+#ifdef PLATFORM_WINDOWS
+#define LINE_WHILE_END_INNER line.clear(); }
+#else
+#define LINE_WHILE_END_INNER line.clear(); } InputStream::release();
+#endif
+#define LINE_WHILE_END LINE_WHILE_END_INNER return 0;
+
+#define COLORED_LINE_WHILE_START color::unsafeInitRed; color::unsafeInitRed; LINE_WHILE_START
+#define COLORED_LINE_WHILE_END_INNER LINE_WHILE_END_INNER color::release();
+#define COLORED_LINE_WHILE_END COLORED_LINE_WHILE_END_INNER return 0;
+
+#ifdef PLATFORM_WINDOWS
+#define INNER_WINDOWS_SIGNAL_CHECK_START if (shouldLoopRun) {
+#define INNER_WINDOWS_SIGNAL_CHECK_END(releasingCode) } releasingCode
+#else
+#define INNER_WINDOWS_SIGNAL_CHECK_START		// TODO: Make sure this is the correct way of doing this.
+#define INNER_WINDOWS_SIGNAL_CHECK_END(releasingCode)
+#endif
+
+#ifdef PLATFORM_WINDOWS
+#define INNER_INPUT_STREAM_READ_LINE(releasingCode) if (InputStream::readLine(line)) { releasingCode }
+#define INNER_INPUT_STREAM_DISCARD_LINE(releasingCode) if (InputStream::discardLine()) { releasingCode }
+#else
+#define INNER_INPUT_STREAM_READ_LINE(releasingCode) if (InputStream::readLine(line)) { InputStream::release(); releasingCode }
+#define INNER_INPUT_STREAM_DISCARD_LINE(releasingCode) if (InputStream::discardLine()) { InputStream::release(); releasingCode }
+#endif
 
 // TODO: Learn about SFINAE and std::enable_if.
 
 // Program entry point
 int main(int argc, char** argv) {
 #ifdef PLATFORM_WINDOWS
-	// TODO: Add sigterm to this handler somehow.
 	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
-											// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
-#else
-	InputStream::init();					// Initialise InputStream, doesn't do anything on Windows, so only necessary on Linux.
+	signal(SIGTERM, signalHandler);			// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 #endif
 	// Only enable colors if stdout is a TTY to make reading piped output easier for other programs.
 	if (isatty(STDOUT_FILENO)) {
@@ -500,183 +527,256 @@ int main(int argc, char** argv) {
 
 	// Branch based on if the output is colored or not. This is so that we don't check it over and over again inside the loop, which is terrible.
 	if (isOutputColored) {					// If output is colored, activate colors and do the more complex matching algorithm
-		
 		if (flags::allLines) {
-			if (flags::inverted) { InputStream::release(); return 0; }			// TODO: You could avoid doing this if you initialized after this branch. Worry about that once the program is more finished.
-			color::unsafeInitRed();
-			color::unsafeInitReset();
+			if (flags::inverted) { return 0; }
 			if (flags::only_line_nums) {
-				lineCounter = 1;			// TODO: Should we just set the global lineCounter var to this from the start. Might be better for program run time because of BSS segment and automatic data filling.
-				LINE_WHILE_START std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END
+				COLORED_LINE_WHILE_START
+					// TODO: Make sure you understand the difference between regex search and match. Would match be better here?
+					if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << std::endl; lineCounter++; continue; }
+					std::cout << lineCounter << std::endl;
+					lineCounter++;
+				COLORED_LINE_WHILE_END
 			}
 			if (flags::lineNums) {
-				lineCounter = 1;
-				LINE_WHILE_START
+				COLORED_LINE_WHILE_START
 					std::cout << lineCounter << ' ';
 					if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
-					std::cout << line << std::endl;														// Print the rest of the line where no match was found. If whole line is matchless, prints the whole line because flags::allLines.
+					std::cout << line << std::endl;
 					lineCounter++;
-				LINE_WHILE_END
+				COLORED_LINE_WHILE_END
 			}
-			LINE_WHILE_START
-				if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
-				std::cout << line << std::endl;
-			LINE_WHILE_END
+			COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); } std::cout << line << std::endl; COLORED_LINE_WHILE_END
 		}
-
 
 		// TODO: Go through the whole program and sort nested if's by probability of being hit. If statements that just protect against dumb series' of
 		// command line flags should be at bottom for example.
 		if (flags::context) {
-			if (flags::allLines) {
-				if (flags::inverted) { InputStream::release(); return 0; }
-				color::unsafeInitRed();
-				color::unsafeInitReset();
-				if (flags::only_line_nums) {
-					lineCounter = 1;
+			if (flags::only_line_nums) {
+				if (flags::inverted) {
 					LINE_WHILE_START
-						// TODO: Make sure you understand the difference between regex search and match. Would match be better here?
-						if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << std::endl; lineCounter++; continue; }
-						std::cout << lineCounter << std::endl;
+						if (std::regex_search(line, matchData, keyphraseRegex)) {
+							HistoryBuffer::purgeAmountFilled();
+							size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
+							for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(return 0;) }
+							lineCounter += forwardJump;
+							continue;
+						}
+						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << std::endl; }
+						HistoryBuffer::incrementAmountFilled();
 						lineCounter++;
 					LINE_WHILE_END
 				}
-				if (flags::lineNums) {
-					lineCounter = 1;
-					LINE_WHILE_START
-						std::cout << lineCounter << ' ';
-						if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
-						std::cout << line << std::endl;
-					LINE_WHILE_END
-				}
-				LINE_WHILE_START
-					if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
-					std::cout << line << std::endl;
-				LINE_WHILE_END
-			}
-			color::unsafeInitRed();
-			color::unsafeInitReset();
-			if (flags::only_line_nums) {
-				lineCounter = 1;
-				LINE_WHILE_START
+				COLORED_LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
 						HistoryBuffer::printLineNums();
-						std::cout << lineCounter << std::endl;
+						std::cout << color::red << lineCounter << color::reset << std::endl;
 						lineCounter++;
 						for (size_t padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
-#ifdef PLATFORM_WINDOWS
-							if (shouldLoopRun) {
-#endif
-								line.clear();			// TODO: Do we need this here in this specific case?
-								if (InputStream::readLine(line)) { goto releaseAndExit; }
+							INNER_WINDOWS_SIGNAL_CHECK_START
+								line.clear();
+								INNER_INPUT_STREAM_READ_LINE(color::release(); return 0;)
 								if (std::regex_search(line, matchData, keyphraseRegex)) {
-									std::cout << lineCounter << std::endl;
+									std::cout << color::red << lineCounter << color::reset << std::endl;
 									padding = HistoryBuffer::buffer_lastIndex;
 									continue;
 								}
 								lineCounter++;			// TODO: Is there a way to avoid adding to two seperate things. Can we base loop off of lineCounter?
 								padding--;
 								continue;
-#ifdef PLATFORM_WINDOWS
-							}
-							goto releaseAndExit;
-#endif
+							INNER_WINDOWS_SIGNAL_CHECK_END(color::release(); return 0;)
 						}
 						continue;
 					}
-					HistoryBuffer::pushLine();
+					HistoryBuffer::incrementAmountFilled();
 					lineCounter++;
-				LINE_WHILE_END
+				COLORED_LINE_WHILE_END			// UP TO HERE
 			}
 			if (flags::lineNums) {
-				lineCounter = 1;
-				LINE_WHILE_START
+				if (flags::inverted) {
+					LINE_WHILE_START
+						if (std::regex_search(line, matchData, keyphraseRegex)) {
+							HistoryBuffer::purgeWithAmountSet();
+							size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
+							for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(HistoryBuffer::release(); return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;) }
+							lineCounter += forwardJump;
+							continue;
+						}
+						std::string safestLine;
+						if (HistoryBuffer::peekSafestLine(safestLine)) {
+							size_t safestLineNum;
+							if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << std::endl; }
+						}
+						HistoryBuffer::pushWithAmountInc(line);
+						lineCounter++;
+					LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
+				}
+				COLORED_LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
 						HistoryBuffer::printLinesWithLineNums();
 						std::cout << lineCounter << ' '; highlightMatches(); std::cout << line << std::endl;
+						for (size_t padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+							INNER_WINDOWS_SIGNAL_CHECK_START
+								line.clear();
+								INNER_INPUT_STREAM_READ_LINE(color::release(); HistoryBuffer::release(); return 0;)
+								if (std::regex_search(line, matchData, keyphraseRegex)) {
+									std::cout << lineCounter << ' '; highlightMatches(); std::cout << line << std::endl;
+									padding = HistoryBuffer::buffer_lastIndex;
+									continue;
+								}
+								lineCounter++;			// TODO: Is there a way to avoid adding to two seperate things. Can we base loop off of lineCounter?
+								padding--;
+								continue;
+							INNER_WINDOWS_SIGNAL_CHECK_END(color::release(); HistoryBuffer::release(); return 0;)
+						}
+						continue;
 					}
+					HistoryBuffer::push(line);
+					lineCounter++;
+				COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;		// UP TO HERE
 			}
-			LINE_WHILE_START
+			COLORED_LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
 					HistoryBuffer::print();
 					highlightMatches(); std::cout << line << std::endl;
-					unsigned int padding = HistoryBuffer::buffer_lastIndex;
-					while (true) {																	// History has already been printed, now we have to print the future padding.
-#ifdef PLATFORM_WINDOWS
-						if (shouldLoopRun) {
-#endif
+					for (size_t padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+						INNER_WINDOWS_SIGNAL_CHECK_START
 							line.clear();
-							if (InputStream::readLine(line)) { goto releaseAndExit; }
+							INNER_INPUT_STREAM_READ_LINE(color::release(); HistoryBuffer::release(); return 0;)
 							if (std::regex_search(line, matchData, keyphraseRegex)) {
 								highlightMatches(); std::cout << line << std::endl;
 								padding = HistoryBuffer::buffer_lastIndex;
 								continue;
 							}
 							std::cout << line << std::endl;
-							if (padding == 1) { line.clear(); break; }
 							padding--;
 							continue;
-#ifdef PLATFORM_WINDOWS
-						}
-						goto releaseAndExit;
-#endif
+						INNER_WINDOWS_SIGNAL_CHECK_END(color::release(); HistoryBuffer::release(); return 0;)
 					}
 					continue;
 				}
 				HistoryBuffer::push(line);
-			LINE_WHILE_END
+			COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 		}
 
-		color::unsafeInitRed();
-		color::unsafeInitReset();
-
-		LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } LINE_WHILE_END
+		COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } COLORED_LINE_WHILE_END			// UP TO HERE
 	}
 
-	color::unsafeInitPipedRed();																	// If output isn't colored, activate uncolored versions of red and reset.
-	color::unsafeInitPipedReset();
-	
-	if (flags::allLines) { LINE_WHILE_START std::cout << line << std::endl; LINE_WHILE_END }
+	if (flags::allLines) {
+		if (flags::inverted) { return 0; }
+		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE(return 0;) std::cout << lineCounter << std::endl; lineCounter++; } }
+		if (flags::lineNums) { LINE_WHILE_START std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
+		LINE_WHILE_START std::cout << line << std::endl; LINE_WHILE_END
+	}				// UP TO HERE
 
 	if (flags::context) {
+		if (flags::only_line_nums) {
+			if (flags::inverted) {
+				LINE_WHILE_START
+					if (std::regex_search(line, matchData, keyphraseRegex)) {
+						HistoryBuffer::purgeAmountFilled();
+						size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
+						for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(return 0;) }
+						lineCounter += forwardJump;
+						continue;
+					}
+					size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << std::endl; }
+					HistoryBuffer::incrementAmountFilled();
+					lineCounter++;
+				LINE_WHILE_END
+			}			// UP TO HERE
+			LINE_WHILE_START
+				if (std::regex_search(line, matchData, keyphraseRegex)) {
+					HistoryBuffer::printLineNums();
+					std::cout << lineCounter << std::endl;
+					lineCounter++;
+					for (size_t padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+						INNER_WINDOWS_SIGNAL_CHECK_START
+							line.clear();			// TODO: Make sure the raw line numbers are still colored on hits at the top of the loop section.
+							INNER_INPUT_STREAM_READ_LINE(return 0;)
+							if (std::regex_search(line, matchData, keyphraseRegex)) {
+								std::cout << lineCounter << std::endl;
+								padding = HistoryBuffer::buffer_lastIndex;
+								continue;
+							}
+							lineCounter++;			// TODO: Is there a way to avoid adding to two seperate things. Can we base loop off of lineCounter?
+							padding--;
+							continue;
+						INNER_WINDOWS_SIGNAL_CHECK_END(return 0;)
+					}
+					continue;
+				}
+				HistoryBuffer::incrementAmountFilled();
+				lineCounter++;
+			LINE_WHILE_END
+		}				// UP TO HERE
+		if (flags::lineNums) {
+			if (flags::inverted) {
+				LINE_WHILE_START
+					if (std::regex_search(line, matchData, keyphraseRegex)) {
+						HistoryBuffer::purgeWithAmountSet();
+						size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
+						for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(HistoryBuffer::release(); return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;) }
+						lineCounter += forwardJump;
+						continue;
+					}
+					std::string safestLine;
+					if (HistoryBuffer::peekSafestLine(safestLine)) {
+						size_t safestLineNum;
+						if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << std::endl; }
+					}
+					HistoryBuffer::pushWithAmountInc(line);
+					lineCounter++;
+				LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
+			}
+			LINE_WHILE_START
+				if (std::regex_search(line, matchData, keyphraseRegex)) {
+					HistoryBuffer::printLinesWithLineNums();
+					std::cout << lineCounter << ' ' << line << std::endl;
+					for (size_t padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+						INNER_WINDOWS_SIGNAL_CHECK_START
+							line.clear();
+							INNER_INPUT_STREAM_READ_LINE(HistoryBuffer::release(); return 0;)
+							if (std::regex_search(line, matchData, keyphraseRegex)) {
+								std::cout << lineCounter << ' ' << line << std::endl;
+								padding = HistoryBuffer::buffer_lastIndex;
+								continue;
+							}
+							lineCounter++;			// TODO: Is there a way to avoid adding to two seperate things. Can we base loop off of lineCounter?
+							padding--;
+							continue;
+						INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;)
+					}
+					continue;
+				}
+				HistoryBuffer::push(line);
+				lineCounter++;
+			LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
+		}
 		LINE_WHILE_START
 			if (std::regex_search(line, matchData, keyphraseRegex)) {
 				HistoryBuffer::print();
 				std::cout << line << std::endl;
-				unsigned int padding = HistoryBuffer::buffer_lastIndex;
-				while (true) {
-#ifdef PLATFORM_WINDOWS
-					if (shouldLoopRun) {
-#endif
+				for (size_t padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+					INNER_WINDOWS_SIGNAL_CHECK_START
 						line.clear();
-						if (InputStream::readLine(line)) { goto releaseAndExit; }
+						INNER_INPUT_STREAM_READ_LINE(HistoryBuffer::release(); return 0;)
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
 							std::cout << line << std::endl;
 							padding = HistoryBuffer::buffer_lastIndex;
 							continue;
 						}
 						std::cout << line << std::endl;
-						if (padding == 1) { line.clear(); break; }
 						padding--;
 						continue;
-#ifdef PLATFORM_WINDOWS
-					}
-					goto releaseAndExit;
-#endif
+					INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;)
 				}
 				continue;
 			}
 			HistoryBuffer::push(line);
-		LINE_WHILE_END
+		LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 	}
 
-	
 	LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; } LINE_WHILE_END
-
-releaseAndExit:
-	HistoryBuffer::release();
-	InputStream::release();																			// This doesn't do anything on Windows.
-	color::release();
 }
 
 /*
