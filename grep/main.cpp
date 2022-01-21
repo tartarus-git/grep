@@ -474,7 +474,7 @@ void highlightMatches() {																							// I assume this will be inlined
 #ifdef PLATFORM_WINDOWS
 #define MAIN_WHILE while (shouldLoopRun)
 #else
-#define MAIN_WHILE InputStream::init; while (true)
+#define MAIN_WHILE InputStream::init(); while (true)
 #endif
 
 #define LINE_WHILE_START MAIN_WHILE { if (!InputStream::readLine(line)) { break; }
@@ -485,7 +485,7 @@ void highlightMatches() {																							// I assume this will be inlined
 #endif
 #define LINE_WHILE_END LINE_WHILE_END_INNER return 0;
 
-#define COLORED_LINE_WHILE_START color::unsafeInitRed; color::unsafeInitRed; LINE_WHILE_START
+#define COLORED_LINE_WHILE_START color::unsafeInitRed(); color::unsafeInitReset(); LINE_WHILE_START
 #define COLORED_LINE_WHILE_END_INNER LINE_WHILE_END_INNER color::release();
 #define COLORED_LINE_WHILE_END COLORED_LINE_WHILE_END_INNER return 0;
 
@@ -591,7 +591,7 @@ int main(int argc, char** argv) {
 					}
 					HistoryBuffer::incrementAmountFilled();
 					lineCounter++;
-				COLORED_LINE_WHILE_END			// UP TO HERE
+				COLORED_LINE_WHILE_END
 			}
 			if (flags::lineNums) {
 				if (flags::inverted) {
@@ -635,7 +635,7 @@ int main(int argc, char** argv) {
 					}
 					HistoryBuffer::push(line);
 					lineCounter++;
-				COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;		// UP TO HERE
+				COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 			}
 			COLORED_LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
@@ -661,7 +661,7 @@ int main(int argc, char** argv) {
 			COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 		}
 
-		COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } COLORED_LINE_WHILE_END			// UP TO HERE
+		COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } COLORED_LINE_WHILE_END
 	}
 
 	if (flags::allLines) {
@@ -669,7 +669,7 @@ int main(int argc, char** argv) {
 		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE(return 0;) std::cout << lineCounter << std::endl; lineCounter++; } }
 		if (flags::lineNums) { LINE_WHILE_START std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
 		LINE_WHILE_START std::cout << line << std::endl; LINE_WHILE_END
-	}				// UP TO HERE
+	}
 
 	if (flags::context) {
 		if (flags::only_line_nums) {
@@ -686,7 +686,7 @@ int main(int argc, char** argv) {
 					HistoryBuffer::incrementAmountFilled();
 					lineCounter++;
 				LINE_WHILE_END
-			}			// UP TO HERE
+			}
 			LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
 					HistoryBuffer::printLineNums();
@@ -711,7 +711,7 @@ int main(int argc, char** argv) {
 				HistoryBuffer::incrementAmountFilled();
 				lineCounter++;
 			LINE_WHILE_END
-		}				// UP TO HERE
+		}
 		if (flags::lineNums) {
 			if (flags::inverted) {
 				LINE_WHILE_START
