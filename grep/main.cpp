@@ -197,7 +197,7 @@ public:
 		}
 	}
 
-	static void printLineNums() { for (amountFilled = lineCounter - amountFilled; amountFilled < lineCounter; amountFilled++) { std::cout << amountFilled << std::endl; } purgeAmountFilled(); }
+	static void printLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << std::endl; } purgeAmountFilled(); }
 
 	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }
 
@@ -238,7 +238,7 @@ bool addToUInt(unsigned int& value, char character) {
 	return true;
 }
 
-unsigned int parseUInt(char* string) {
+unsigned int parseUInt(char* string) {				// TODO: A future improvement would be to offset the line from the line number differently based on how many digits the number has in the console. So that lines don't start nudging to the right when going from line 99 to line 100. 
 	unsigned int result = 0;
 	if (string[0] != '\0') {
 		if (addToUInt(result, string[0])) {
@@ -290,7 +290,6 @@ unsigned int parseFlags(int argc, char** argv) {
 			parseFlagGroup(argv[i] + 1);
 			continue;
 		}
-		if (flags::context && !flags::only_line_nums) { HistoryBuffer::init(); }									// Necessary to do this after the whole flag parsing ordeal because or else the HistoryBuffer could get initialized twice or it could get initialized when it's not supposed to. This avoids that.
 		return i;																									// Return index of first arg that isn't flag arg. Helps calling code parse args.
 	}
 	return argc;																									// No non-flag argument was found. Return argc because it works nicely with calling code.
@@ -583,6 +582,7 @@ int main(int argc, char** argv) {
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
 									continue;
 								}
+								std::cout << lineCounter << std::endl;
 								lineCounter++;
 								continue;
 							INNER_WINDOWS_SIGNAL_CHECK_END(color::release(); return 0;)
@@ -595,6 +595,7 @@ int main(int argc, char** argv) {
 			}
 			if (flags::lineNums) {
 				if (flags::inverted) {
+					HistoryBuffer::init();
 					LINE_WHILE_START
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
 							HistoryBuffer::purgeWithAmountSet();
@@ -612,6 +613,7 @@ int main(int argc, char** argv) {
 						lineCounter++;
 					LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 				}
+				HistoryBuffer::init();
 				COLORED_LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
 						HistoryBuffer::printLinesWithLineNums();
@@ -627,6 +629,7 @@ int main(int argc, char** argv) {
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
 									continue;
 								}
+								std::cout << lineCounter << ' ' << line << std::endl;
 								lineCounter++;
 								continue;
 							INNER_WINDOWS_SIGNAL_CHECK_END(color::release(); HistoryBuffer::release(); return 0;)
@@ -637,6 +640,7 @@ int main(int argc, char** argv) {
 					lineCounter++;
 				COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 			}
+			HistoryBuffer::init();
 			COLORED_LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
 					HistoryBuffer::print();
@@ -661,6 +665,13 @@ int main(int argc, char** argv) {
 			COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 		}
 
+		// SIDE-NOTE: Storing these command-line flags in a bit field and switching on it's value might have been a better way to do this in theory, because it's more efficient and might look better, but in practice, it might not have been the way to go.
+		// It's not very scalable because you have to write out every single case (or use default, but that isn't applicable when you have complex relationships between cases and such). As soon as you have anywhere near something like 16 flags, your code bloat starts to become insane.
+		// So I think the if statement approach is a good one, even though it's technically a very small bit less performant than the switch case approach.
+
+		if (flags::inverted) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << line << std::endl; LINE_WHILE_END }
+		if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << std::endl; } lineCounter++; LINE_WHILE_END }
+		if (flags::lineNums) { COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << ' '; highlightMatches(); std::cout << line << std::endl; } lineCounter++; COLORED_LINE_WHILE_END }
 		COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } COLORED_LINE_WHILE_END
 	}
 
@@ -696,13 +707,9 @@ int main(int argc, char** argv) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							line.clear();
 							INNER_INPUT_STREAM_READ_LINE(return 0;)
-							if (std::regex_search(line, matchData, keyphraseRegex)) {
-								std::cout << lineCounter << std::endl;
-								lineCounter++;
-								afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
-								continue;
-							}
+							std::cout << lineCounter << std::endl;
 							lineCounter++;
+							if (std::regex_search(line, matchData, keyphraseRegex)) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
 							continue;
 						INNER_WINDOWS_SIGNAL_CHECK_END(return 0;)
 					}
@@ -714,6 +721,7 @@ int main(int argc, char** argv) {
 		}
 		if (flags::lineNums) {
 			if (flags::inverted) {
+				HistoryBuffer::init();
 				LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
 						HistoryBuffer::purgeWithAmountSet();
@@ -731,6 +739,7 @@ int main(int argc, char** argv) {
 					lineCounter++;
 				LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 			}
+			HistoryBuffer::init();
 			LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
 					HistoryBuffer::printLinesWithLineNums();
@@ -740,13 +749,9 @@ int main(int argc, char** argv) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							line.clear();
 							INNER_INPUT_STREAM_READ_LINE(HistoryBuffer::release(); return 0;)
-							if (std::regex_search(line, matchData, keyphraseRegex)) {
-								std::cout << lineCounter << ' ' << line << std::endl;
-								lineCounter++;
-								afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
-								continue;
-							}
+							std::cout << lineCounter << ' ' << line << std::endl;
 							lineCounter++;
+							if (std::regex_search(line, matchData, keyphraseRegex)) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
 							continue;
 						INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;)
 					}
@@ -756,6 +761,7 @@ int main(int argc, char** argv) {
 				lineCounter++;
 			LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 		}
+		HistoryBuffer::init();
 		LINE_WHILE_START
 			if (std::regex_search(line, matchData, keyphraseRegex)) {
 				HistoryBuffer::print();
@@ -780,6 +786,10 @@ int main(int argc, char** argv) {
 		LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 	}
 
+
+	if (flags::inverted) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << line << std::endl; LINE_WHILE_END }
+	if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << std::endl; } lineCounter++; LINE_WHILE_END }
+	if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << ' ' << line << std::endl; } lineCounter++; LINE_WHILE_END }
 	LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; } LINE_WHILE_END
 }
 
