@@ -542,7 +542,7 @@ int main(int argc, char** argv) {
 			}
 			if (flags::lineNums) {
 				COLORED_LINE_WHILE_START
-					std::cout << lineCounter << ' ';
+					std::cout << lineCounter << ' ';						// TODO: After looking at the output for some of the stuff with the lines and the line numbers, I think that lines with matches in them should have red line numbers on the side, throughout the whole program. Do that in future. Helps with visibility.
 					if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
 					std::cout << line << std::endl;
 					lineCounter++;
