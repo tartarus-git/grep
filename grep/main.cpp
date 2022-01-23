@@ -59,7 +59,7 @@ const char* helpText = "grep accepts text as input and outputs the lines from th
 							"\t--only-line-nums             -->         print only the line numbers, not the actual lines\n";
 
 // Flag to keep track of whether we should color output or not. Can also be used for testing if output is a TTY or not.
-bool isOutputColored;
+bool isOutputColored;						// TODO: In order to make testing the command programmatically easier, add a command line flag that overrides the default choice for isOutputColored and lets the user decide.
 
 // Output coloring.
 namespace color {
