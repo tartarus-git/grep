@@ -224,7 +224,7 @@ void parseFlagGroup(char* arg) {
 		case '\0': return;
 		default:
 			initOutputStyling();
-			std::cout << format::error << "one or more flag arguments is invalid" << format::endl;
+			std::cout << format::error << "one or more flag arguments are invalid" << format::endl;
 			releaseOutputStyling();
 			exit(EXIT_SUCCESS);
 		}
@@ -421,7 +421,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		char character;
 		while (true) {																										// Purposefully not putting shouldLoopRun here. I don't think the check is worth it since fread will still wait for user if it needs to, making shouldLoopRun unnecessary overhead.
 																															// The most it'll do is make processing the characters that the user typed in interruptable. That isn't useful since processing them takes so little time. The check would be inefficient.
-			if (fread(&character, sizeof(char), 1, stdin)) { if (character == '\n') { return true; } }
+			if (fread(&character, sizeof(char), 1, stdin)) { if (character == '\n') { return true; } }							// TODO: Is it ok to mix fread and std::getline in the same program. Since they probably have different stream buffers, won't a bunch of characters get repeated when using them both in the same program?
 			if (ferror(stdin)) {																							// If it's an error, report it.
 				format::initError();
 				format::initEndl();
@@ -640,6 +640,22 @@ int main(int argc, char** argv) {
 					lineCounter++;
 				COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 			}
+			if (flags::inverted) {
+				HistoryBuffer::init();
+				LINE_WHILE_START
+					if (std::regex_search(line, matchData, keyphraseRegex)) {
+						HistoryBuffer::purge();
+						size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
+						for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(HistoryBuffer::release(); return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;) }
+						lineCounter += forwardJump;
+						continue;
+					}
+					std::string safestLine;
+					if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << std::endl; }			// TODO: This doesn't work here yet because it needs to use amountFilled and the other functions in this function don't set amountFilled at all. Fix that.
+					HistoryBuffer::push(line);
+					lineCounter++;
+				LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
+			}
 			HistoryBuffer::init();
 			COLORED_LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
@@ -761,6 +777,22 @@ int main(int argc, char** argv) {
 					}
 					continue;
 				}
+				HistoryBuffer::push(line);
+				lineCounter++;
+			LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
+		}
+		if (flags::inverted) {
+			HistoryBuffer::init();
+			LINE_WHILE_START
+				if (std::regex_search(line, matchData, keyphraseRegex)) {
+					HistoryBuffer::purge();
+					size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
+					for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(HistoryBuffer::release(); return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;) }
+					lineCounter += forwardJump;
+					continue;
+				}
+				std::string safestLine;
+				if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << std::endl; }
 				HistoryBuffer::push(line);
 				lineCounter++;
 			LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
