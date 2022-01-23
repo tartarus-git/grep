@@ -39,7 +39,7 @@ test --context 1 -al a
 test --context 1 -cal a
 test --context 1 -cl A
 
-#test --context 5 -v a
+test --context 5 -v a
 #test --context 5 -v -a a
 #test --context 5 -v -c a
 #test --context 5 -v -ca a
