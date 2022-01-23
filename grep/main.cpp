@@ -669,7 +669,11 @@ int main(int argc, char** argv) {
 		// It's not very scalable because you have to write out every single case (or use default, but that isn't applicable when you have complex relationships between cases and such). As soon as you have anywhere near something like 16 flags, your code bloat starts to become insane.
 		// So I think the if statement approach is a good one, even though it's technically a very small bit less performant than the switch case approach.
 
-		if (flags::inverted) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << line << std::endl; LINE_WHILE_END }
+		if (flags::inverted) {
+			if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END }
+			if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
+			LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << line << std::endl; LINE_WHILE_END
+		}
 		if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << std::endl; } lineCounter++; LINE_WHILE_END }
 		if (flags::lineNums) { COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << ' '; highlightMatches(); std::cout << line << std::endl; } lineCounter++; COLORED_LINE_WHILE_END }
 		COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } COLORED_LINE_WHILE_END
@@ -786,8 +790,11 @@ int main(int argc, char** argv) {
 		LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 	}
 
-
-	if (flags::inverted) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << line << std::endl; LINE_WHILE_END }
+	if (flags::inverted) {
+		if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END }
+		if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
+		LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << line << std::endl; LINE_WHILE_END
+	}
 	if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << std::endl; } lineCounter++; LINE_WHILE_END }
 	if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << ' ' << line << std::endl; } lineCounter++; LINE_WHILE_END }
 	LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << line << std::endl; } LINE_WHILE_END
