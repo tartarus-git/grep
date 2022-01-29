@@ -338,3 +338,6 @@ ASALocalRun/
 
 # BeatPulse healthcheck temp database
 healthchecksdb
+
+# output.txt in the testing system doesn't need to be included in commits because it's just temp storage
+test/output.txt
