@@ -22,7 +22,7 @@
 #include <io.h>																											// Needed for _isatty function.
 #define isatty(x) _isatty(x)																							// Renaming _isatty to isatty so it's the same as the function call in Linux.
 #else
-#include <errno.h>																										// Gives us access to errno global variable for reading errors from certain functions.
+#include <cerrno.h>																										// Gives us access to errno global variable for reading errors from certain functions.
 #include <unistd.h>																										// Linux isatty function is in here as well as some other useful stuff for this program as well I think.
 #include <fcntl.h>																										// File control function used in InputStream to set console input to non-blocking.
 #endif
@@ -30,12 +30,12 @@
 #include <chrono>																										// For access to time durations for use with sleep_for().
 #include <thread>																										// For access to std::this_thread::sleep_for() and std::this_thread::yield().
 
-#include <stdio.h>
+#include <cstdio>																										// NOTE: Use "c___" headers instead of "____.h" headers whenever possible. The "c___" counterparts minimize global scope pollution by putting a lot of things in namespaces and replacing some #defines with functions. It's more "correct".
 #include <iostream>
 #include <string>
 #include <regex>
 
-#ifdef PLATFORM_WINDOWS																									// This define is already defined in one of the Linux-only headers, but for Windows, we need to explicitly do it.
+#ifdef PLATFORM_WINDOWS																									// These #defines are already defined in one of the Linux-only headers, but for Windows, we need to explicitly do it.
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
 #endif
@@ -170,13 +170,11 @@ public:
 
 	static void push(const std::string& line) { buffer[index] = line; incrementHead(); }
 
-	static void incrementHeadWithAmountInc() { if (amountFilled != buffer_lastIndex) { amountFilled++; } incrementHead(); }
-
-	static void pushWithAmountInc(const std::string& line) { buffer[index] = line; incrementHeadWithAmountInc(); }
+	static void pushWithAmountInc(const std::string& line) { push(line); if (amountFilled != buffer_lastIndex) { amountFilled++; } }
 
 	static void purge() { index = beginIndex; }
 
-	static void purgeWithAmountSet() { purge(); amountFilled = 0; }
+	static void purgeWithAmountSet() { purge(); purgeAmountFilled(); }
 
 	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout << buffer[beginIndex] << std::endl; } }
 
@@ -192,12 +190,11 @@ public:
 		std::cout << lineCounter << ' ' << buffer[beginIndex] << std::endl;
 		lineCounter++;
 		beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1);
-		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) {
-			std::cout << lineCounter << ' ' << buffer[beginIndex] << std::endl;
-		}
+		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) { std::cout << lineCounter << ' ' << buffer[beginIndex] << std::endl; }
 	}
 
-	static void printLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << std::endl; } purgeAmountFilled(); }
+	static void lastPrintLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << std::endl; } }
+	static void printLineNums() { lastPrintLineNums(); purgeAmountFilled(); }
 
 	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }
 
@@ -332,6 +329,7 @@ void manageArgs(int argc, char** argv) {
 class InputStream {
 #ifdef PLATFORM_WINDOWS
 public:
+	static void init() { std::cin.sync_with_stdio(false); }															// Unsynchronize C++ input buffer with C input buffer. This often makes things faster because implementors often don't bother buffering input until this is set to false (where they can then safely buffer input).
 #else
 	static pollfd fds[2];																							// File descriptors to poll. One for stdin and one for a signal fd.
 	static sigset_t sigmask;																						// Signals to handle with poll.
@@ -363,6 +361,10 @@ public:
 
 errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now unused entry in fds because some error prevented us from setting it up correctly.
 	}
+
+	// NOTE: I think we probably could have just used the standard input buffering mechanisms (while retaining the ability to adjust buffer size) instead of building our own.
+	// NOTE: That would probably be faster since the standard is optimized for each platform. I'm too proud of my mechanism to remove it right now, so I'm leaving it in for the forseeable future.
+	// NOTE: Plus, I haven't done any benchmarks. Maybe this is faster than the standard because the standard might do a bunch of safety checks and unnecessary stuff.
 
 	static bool refillBuffer() {
 		// When no more data left in buffer, try get more.
@@ -399,41 +401,41 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 	}
 #endif
 
-	static bool readLine(std::string& line) {																		// Returns true on success. Returns false on EOF in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
+	static bool readLine(std::string& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
 #ifdef PLATFORM_WINDOWS
-		if (std::cin.eof()) { return false; }
-		std::getline(std::cin, line);					// TODO: It bothers me that this fails with an exception when it does. Is there another function we can use that returns an error code or something, like fread?
-		return true;
+		if (std::getline(std::cin, line)) { return !std::cin.eof(); }												// Get line. If get succeeds, we still need to check if we just read at EOF and return appropriate value.
+		format::initError();																						// If get doesn't succeed, some error ocurred and we need to report it and return false.
+		format::initEndl();
+		std::cout << format::error									// TODO: Now that the colors are initialized so late, we have no way of knowing in this function if the colors are initialized or not. You have do redesign the coloring and error system for this to work smoothly. Do that.
+
 #else
 		while (true) {
 			for (; bytesRead < bytesReceived; bytesRead++) {														// Read all the data in the buffer.
 				if (buffer[bytesRead] == '\n') { bytesRead += 1; return true; }										// Stop when we encounter the end of the current line.
 				line += buffer[bytesRead];
 			}
-			return refillBuffer();																					// If we never encounter the end of the line in the current buffer, fetch more data.
+			if (refillBuffer()) { continue; }																		// If we never encounter the end of the line in the current buffer, fetch more data.
+			return false;																							// If something went wrong while refilling buffer, return false.
 		}
 #endif
 	}
 
-	static bool discardLine() {																						// Discards the next line from input. That means: reads the line but doesn't store it anywhere since we're only reading it to discard everything up to the next newline.
-																													// Returns true on success. Returns false on EOF and on error on Windows. Returns false on EOF, error, SIGINT and SIGTERM on Linux.
+	static bool discardLine() {																						// Reads the next line but doesn't store it anywhere since we're only reading it to advance the read position. Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF, SIGINT, SIGTERM or error on Linux.
 #ifdef PLATFORM_WINDOWS
 		char character;
-		while (true) {																										// Purposefully not putting shouldLoopRun here. I don't think the check is worth it since fread will still wait for user if it needs to, making shouldLoopRun unnecessary overhead.
-																															// The most it'll do is make processing the characters that the user typed in interruptable. That isn't useful since processing them takes so little time. The check would be inefficient.
-			if (fread(&character, sizeof(char), 1, stdin)) { if (character == '\n') { return true; } }							// TODO: Is it ok to mix fread and std::getline in the same program. Since they probably have different stream buffers, won't a bunch of characters get repeated when using them both in the same program?
-			if (ferror(stdin)) {																							// If it's an error, report it.
-				format::initError();
-				format::initEndl();
-				std::cout << format::error << "failed to read from stdin" << format::endl;
-				format::release();
-			}
-			return false;																									// Whether error or eof, if the end is here, return false.
+		while (true) {																								// Not going to check for shouldLoopRun here because interrupting inside of a line isn't something that readLine offers either and because console is line-buffered anyway, so it wouldn't actually enable signalling while input is pending.
+			character = std::cin.get();																				// Processing characters once they've been submitted by user is super fast, so the check would be pretty much unnecessary unless the lines are super super super long, which doesn't happen often.
+			if (std::cin.eof()) { return false; }																	// Even if the lines are long, all you'll have to do is press Ctrl+C and wait for the line to be over for grep to quit. This is all so unlikely, that I'm not going to waste a branch checking for it.
+										// TODO: You need to put a check for cin.fail() here and output an error message before returning false.
+			// TODO: Also, check if the colors are even necessary for errors. If we direct the error output to cerr, will that automatically be colored red by powershell?
+				// TODO: Is that a good idea? We should probs keep it so that programs later in the pipe can rely on getting our error information.
+			if (character == '\n') { return true; }
 		}
 #else
 		while (true) {
-			for (; bytesRead < bytesReceived; bytesRead++) { if (buffer[bytesRead] == '\n') { bytesRead += 1; return true; } }				// Read all the data in current buffer and exit as soon as we've discarded an entire line.
-			return refillBuffer();																											// If buffer is empty an we haven't found end of line, refill buffer.
+			for ( ; bytesRead < bytesReceived; bytesRead++) { if (buffer[bytesRead] == '\n') { bytesRead += 1; return true; } }						// Read all the data in current buffer and exit as soon as we've discarded an entire line.
+			if (refillBuffer()) { continue; }
+			return false;
 		}
 #endif
 	}
@@ -471,14 +473,14 @@ void highlightMatches() {																							// I assume this will be inlined
 // A couple of #defines to help reduce code bloat in the coming sections of the program.
 
 #ifdef PLATFORM_WINDOWS
-#define MAIN_WHILE while (shouldLoopRun)
+#define MAIN_WHILE InputStream::init(); while (shouldLoopRun)
 #else
 #define MAIN_WHILE InputStream::init(); while (true)
 #endif
 
 #define LINE_WHILE_START MAIN_WHILE { if (!InputStream::readLine(line)) { break; }
 #ifdef PLATFORM_WINDOWS
-#define LINE_WHILE_END_INNER line.clear(); }
+#define LINE_WHILE_END_INNER }
 #else
 #define LINE_WHILE_END_INNER line.clear(); } InputStream::release();
 #endif
@@ -487,10 +489,18 @@ void highlightMatches() {																							// I assume this will be inlined
 #define COLORED_LINE_WHILE_START color::unsafeInitRed(); color::unsafeInitReset(); LINE_WHILE_START
 #define COLORED_LINE_WHILE_END_INNER LINE_WHILE_END_INNER color::release();
 #define COLORED_LINE_WHILE_END COLORED_LINE_WHILE_END_INNER return 0;
+#define COLORED_RED_ONLY_LINE_WHILE_START color::unsafeInitRed(); color::unsafeInitReset(); std::cout << color::red; LINE_WHILE_START
+#define COLORED_RED_ONLY_LINE_WHILE_END LINE_WHILE_END_INNER std::cout << color::reset; color::release(); return 0;
+
+#ifdef PLATFORM_WINDOWS
+#define LINE_WHILE_CONTINUE continue;
+#else
+#define LINE_WHILE_CONTINUE line.clear(); continue;
+#endif
 
 #ifdef PLATFORM_WINDOWS
 #define INNER_WINDOWS_SIGNAL_CHECK_START if (shouldLoopRun) {
-#define INNER_WINDOWS_SIGNAL_CHECK_END(releasingCode) } releasingCode
+#define INNER_WINDOWS_SIGNAL_CHECK_END(releasingCode) } else { releasingCode }
 #else
 #define INNER_WINDOWS_SIGNAL_CHECK_START
 #define INNER_WINDOWS_SIGNAL_CHECK_END(releasingCode)
@@ -508,10 +518,13 @@ void highlightMatches() {																							// I assume this will be inlined
 
 // Program entry point
 int main(int argc, char** argv) {
+	std::cout.sync_with_stdio(false);		// Unsynchronize C++ output buffer with C output buffer. Normally set to true to avoid output getting mixed around when mixing C++ and C function calls in source code. Setting to false yields performance improvements for same reason as doing this for input buffers above.
+											// IMPORTANT: As a result of doing this unsync stuff, we have to choose either C or C++ style and stick with it for the whole program. It is still possible to use C-style input and C++-style output at same time, the limitation only applies within the boundaries of input and output.
 #ifdef PLATFORM_WINDOWS
 	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
 	signal(SIGTERM, signalHandler);			// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 #endif
+
 	// Only enable colors if stdout is a TTY to make reading piped output easier for other programs.
 	if (isatty(STDOUT_FILENO)) {
 #ifdef PLATFORM_WINDOWS						// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
@@ -535,17 +548,14 @@ int main(int argc, char** argv) {
 			if (flags::inverted) { return 0; }
 			if (flags::only_line_nums) {
 				COLORED_LINE_WHILE_START
-					if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << std::endl; lineCounter++; continue; }
-					std::cout << lineCounter << std::endl;
-					lineCounter++;
+					if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << std::endl; lineCounter++; LINE_WHILE_CONTINUE; }
+					std::cout << lineCounter << std::endl; lineCounter++;
 				COLORED_LINE_WHILE_END
 			}
 			if (flags::lineNums) {
 				COLORED_LINE_WHILE_START
-					std::cout << lineCounter << ' ';						// TODO: After looking at the output for some of the stuff with the lines and the line numbers, I think that lines with matches in them should have red line numbers on the side, throughout the whole program. Do that in future. Helps with visibility.
-					if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); }
-					std::cout << line << std::endl;
-					lineCounter++;
+					if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << line << std::endl; lineCounter++; LINE_WHILE_CONTINUE; }
+					std::cout << lineCounter << ' ' << line << std::endl; lineCounter++;
 				COLORED_LINE_WHILE_END
 			}
 			COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); } std::cout << line << std::endl; COLORED_LINE_WHILE_END
@@ -557,15 +567,21 @@ int main(int argc, char** argv) {
 					LINE_WHILE_START
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
 							HistoryBuffer::purgeAmountFilled();
-							size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
-							for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(return 0;) }
-							lineCounter += forwardJump;
-							continue;
+							lineCounter++;
+							for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
+								INNER_WINDOWS_SIGNAL_CHECK_START
+									line.clear();
+									INNER_INPUT_STREAM_READ_LINE(return 0;)
+									if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
+									lineCounter++;
+								INNER_WINDOWS_SIGNAL_CHECK_END(return 0;)
+							}
+							LINE_WHILE_CONTINUE;
 						}
 						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << std::endl; }
 						HistoryBuffer::incrementAmountFilled();
 						lineCounter++;
-					LINE_WHILE_END
+					LINE_WHILE_END_INNER HistoryBuffer::lastPrintLineNums(); return 0;
 				}
 				COLORED_LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
@@ -584,10 +600,9 @@ int main(int argc, char** argv) {
 								}
 								std::cout << lineCounter << std::endl;
 								lineCounter++;
-								continue;
 							INNER_WINDOWS_SIGNAL_CHECK_END(color::release(); return 0;)
 						}
-						continue;
+						LINE_WHILE_CONTINUE;
 					}
 					HistoryBuffer::incrementAmountFilled();
 					lineCounter++;
@@ -599,42 +614,46 @@ int main(int argc, char** argv) {
 					LINE_WHILE_START
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
 							HistoryBuffer::purgeWithAmountSet();
-							size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
-							for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(HistoryBuffer::release(); return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;) }
-							lineCounter += forwardJump;
-							continue;
+							lineCounter++;
+							for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
+								INNER_WINDOWS_SIGNAL_CHECK_START
+									line.clear();
+									INNER_INPUT_STREAM_READ_LINE(HistoryBuffer::release(); return 0;)
+									if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
+									lineCounter++;
+								INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;)
+							}
+							LINE_WHILE_CONTINUE;
 						}
 						std::string safestLine;
 						if (HistoryBuffer::peekSafestLine(safestLine)) {
-							size_t safestLineNum;
-							if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << std::endl; }
+							size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << std::endl; }
 						}
 						HistoryBuffer::pushWithAmountInc(line);
 						lineCounter++;
-					LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
+					LINE_WHILE_END_INNER HistoryBuffer::printLinesWithLineNums(); HistoryBuffer::release(); return 0;
 				}
 				HistoryBuffer::init();
 				COLORED_LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
 						HistoryBuffer::printLinesWithLineNums();
-						std::cout << lineCounter << ' '; highlightMatches(); std::cout << line << std::endl;
+						std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << line << std::endl;
 						lineCounter++;
 						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 							INNER_WINDOWS_SIGNAL_CHECK_START
 								line.clear();
 								INNER_INPUT_STREAM_READ_LINE(color::release(); HistoryBuffer::release(); return 0;)
 								if (std::regex_search(line, matchData, keyphraseRegex)) {
-									std::cout << lineCounter << ' '; highlightMatches(); std::cout << line << std::endl;
+									std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << line << std::endl;
 									lineCounter++;
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
 									continue;
 								}
 								std::cout << lineCounter << ' ' << line << std::endl;
 								lineCounter++;
-								continue;
 							INNER_WINDOWS_SIGNAL_CHECK_END(color::release(); HistoryBuffer::release(); return 0;)
 						}
-						continue;
+						LINE_WHILE_CONTINUE;
 					}
 					HistoryBuffer::push(line);
 					lineCounter++;
@@ -644,24 +663,27 @@ int main(int argc, char** argv) {
 				HistoryBuffer::init();
 				LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
-						HistoryBuffer::purge();
-						size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
-						for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(HistoryBuffer::release(); return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;) }
-						lineCounter += forwardJump;
-						continue;
+						HistoryBuffer::purgeWithAmountSet();
+						for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+							INNER_WINDOWS_SIGNAL_CHECK_START
+								line.clear();
+								INNER_INPUT_STREAM_READ_LINE(HistoryBuffer::release(); return 0;)
+								if (std::regex_search(line, matchData, keyphraseRegex)) { padding = HistoryBuffer::buffer_lastIndex; continue; }
+								padding--;
+							INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;)
+						}
+						LINE_WHILE_CONTINUE;
 					}
-					std::string safestLine;
-					if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << std::endl; }			// TODO: This doesn't work here yet because it needs to use amountFilled and the other functions in this function don't set amountFilled at all. Fix that.
-					HistoryBuffer::push(line);
-					lineCounter++;
-				LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
+					std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << std::endl; }
+					HistoryBuffer::pushWithAmountInc(line);
+				LINE_WHILE_END_INNER HistoryBuffer::print(); HistoryBuffer::release(); return 0;
 			}
 			HistoryBuffer::init();
 			COLORED_LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
 					HistoryBuffer::print();
 					highlightMatches(); std::cout << line << std::endl;
-					for (size_t padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+					for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							line.clear();
 							INNER_INPUT_STREAM_READ_LINE(color::release(); HistoryBuffer::release(); return 0;)
@@ -672,10 +694,9 @@ int main(int argc, char** argv) {
 							}
 							std::cout << line << std::endl;
 							padding--;
-							continue;
 						INNER_WINDOWS_SIGNAL_CHECK_END(color::release(); HistoryBuffer::release(); return 0;)
 					}
-					continue;
+					LINE_WHILE_CONTINUE;
 				}
 				HistoryBuffer::push(line);
 			COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
@@ -686,12 +707,12 @@ int main(int argc, char** argv) {
 		// So I think the if statement approach is a good one, even though it's technically a very small bit less performant than the switch case approach.
 
 		if (flags::inverted) {
-			if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END }
-			if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
-			LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << line << std::endl; LINE_WHILE_END
+			if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END }
+			if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
+			LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE } std::cout << line << std::endl; LINE_WHILE_END
 		}
-		if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << std::endl; } lineCounter++; LINE_WHILE_END }
-		if (flags::lineNums) { COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << ' '; highlightMatches(); std::cout << line << std::endl; } lineCounter++; COLORED_LINE_WHILE_END }
+		if (flags::only_line_nums) { COLORED_RED_ONLY_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << std::endl; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END }
+		if (flags::lineNums) { COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << line << std::endl; } lineCounter++; COLORED_LINE_WHILE_END }
 		COLORED_LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { highlightMatches(); std::cout << line << std::endl; } COLORED_LINE_WHILE_END
 	}
 
@@ -708,15 +729,21 @@ int main(int argc, char** argv) {
 				LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
 						HistoryBuffer::purgeAmountFilled();
-						size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
-						for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(return 0;) }
-						lineCounter += forwardJump;
-						continue;
+						lineCounter++;
+						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
+							INNER_WINDOWS_SIGNAL_CHECK_START
+								line.clear();
+								INNER_INPUT_STREAM_READ_LINE(return 0;)
+								if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
+								lineCounter++;
+							INNER_WINDOWS_SIGNAL_CHECK_END(return 0;)
+						}
+						LINE_WHILE_CONTINUE;
 					}
 					size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << std::endl; }
 					HistoryBuffer::incrementAmountFilled();
 					lineCounter++;
-				LINE_WHILE_END
+				LINE_WHILE_END_INNER HistoryBuffer::lastPrintLineNums(); return 0;
 			}
 			LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
@@ -730,10 +757,9 @@ int main(int argc, char** argv) {
 							std::cout << lineCounter << std::endl;
 							lineCounter++;
 							if (std::regex_search(line, matchData, keyphraseRegex)) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
-							continue;
 						INNER_WINDOWS_SIGNAL_CHECK_END(return 0;)
 					}
-					continue;
+					LINE_WHILE_CONTINUE;
 				}
 				HistoryBuffer::incrementAmountFilled();
 				lineCounter++;
@@ -745,19 +771,24 @@ int main(int argc, char** argv) {
 				LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
 						HistoryBuffer::purgeWithAmountSet();
-						size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
-						for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(HistoryBuffer::release(); return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;) }
-						lineCounter += forwardJump;
-						continue;
+						lineCounter++;
+						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
+							INNER_WINDOWS_SIGNAL_CHECK_START
+								line.clear();
+								INNER_INPUT_STREAM_READ_LINE(HistoryBuffer::release(); return 0;)
+								if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
+								lineCounter++;
+							INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;)
+						}
+						LINE_WHILE_CONTINUE;
 					}
 					std::string safestLine;
 					if (HistoryBuffer::peekSafestLine(safestLine)) {
-						size_t safestLineNum;
-						if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << std::endl; }
+						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << std::endl; }
 					}
 					HistoryBuffer::pushWithAmountInc(line);
 					lineCounter++;
-				LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
+				LINE_WHILE_END_INNER HistoryBuffer::printLinesWithLineNums(); HistoryBuffer::release(); return 0;
 			}
 			HistoryBuffer::init();
 			LINE_WHILE_START
@@ -772,10 +803,9 @@ int main(int argc, char** argv) {
 							std::cout << lineCounter << ' ' << line << std::endl;
 							lineCounter++;
 							if (std::regex_search(line, matchData, keyphraseRegex)) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
-							continue;
 						INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;)
 					}
-					continue;
+					LINE_WHILE_CONTINUE;
 				}
 				HistoryBuffer::push(line);
 				lineCounter++;
@@ -785,24 +815,27 @@ int main(int argc, char** argv) {
 			HistoryBuffer::init();
 			LINE_WHILE_START
 				if (std::regex_search(line, matchData, keyphraseRegex)) {
-					HistoryBuffer::purge();
-					size_t forwardJump = 1 + HistoryBuffer::buffer_lastIndex;
-					for (size_t i = 0; i < forwardJump; i++) { INNER_WINDOWS_SIGNAL_CHECK_START INNER_INPUT_STREAM_DISCARD_LINE(HistoryBuffer::release(); return 0;) INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;) }
-					lineCounter += forwardJump;
-					continue;
+					HistoryBuffer::purgeWithAmountSet();
+					for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+						INNER_WINDOWS_SIGNAL_CHECK_START
+							line.clear();
+							INNER_INPUT_STREAM_READ_LINE(HistoryBuffer::release(); return 0;)
+							if (std::regex_search(line, matchData, keyphraseRegex)) { padding = HistoryBuffer::buffer_lastIndex; continue; }
+							padding--;
+						INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;)
+					}
+					LINE_WHILE_CONTINUE;
 				}
-				std::string safestLine;
-				if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << std::endl; }
-				HistoryBuffer::push(line);
-				lineCounter++;
-			LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
+				std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << std::endl; }
+				HistoryBuffer::pushWithAmountInc(line);
+			LINE_WHILE_END_INNER HistoryBuffer::print(); HistoryBuffer::release(); return 0;
 		}
 		HistoryBuffer::init();
 		LINE_WHILE_START
 			if (std::regex_search(line, matchData, keyphraseRegex)) {
 				HistoryBuffer::print();
 				std::cout << line << std::endl;
-				for (size_t padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
+				for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 					INNER_WINDOWS_SIGNAL_CHECK_START
 						line.clear();
 						INNER_INPUT_STREAM_READ_LINE(HistoryBuffer::release(); return 0;)
@@ -813,19 +846,18 @@ int main(int argc, char** argv) {
 						}
 						std::cout << line << std::endl;
 						padding--;
-						continue;
 					INNER_WINDOWS_SIGNAL_CHECK_END(HistoryBuffer::release(); return 0;)
 				}
-				continue;
+				LINE_WHILE_CONTINUE;
 			}
 			HistoryBuffer::push(line);
 		LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 	}
 
 	if (flags::inverted) {
-		if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END }
-		if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
-		LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { continue; } std::cout << line << std::endl; LINE_WHILE_END
+		if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END }
+		if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
+		LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE; } std::cout << line << std::endl; LINE_WHILE_END
 	}
 	if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << std::endl; } lineCounter++; LINE_WHILE_END }
 	if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { std::cout << lineCounter << ' ' << line << std::endl; } lineCounter++; LINE_WHILE_END }
