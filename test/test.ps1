@@ -1,6 +1,7 @@
 function validateTestResult {
     param($template, $testResult)
-    if (!(git diff --no-index $template $testResult)) { Write-Host "test passed" } else { Write-Host "TEST FAILED" }
+    if (!(git diff --no-index $template $testResult)) { Write-Host "test passed"; return }
+    Write-Host "TEST FAILED"
     git diff --no-index $template $testResult
 }
 
