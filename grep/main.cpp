@@ -406,7 +406,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		if (std::getline(std::cin, line)) { return !std::cin.eof(); }												// Get line. If get succeeds, we still need to check if we just read at EOF and return appropriate value.
 		format::initError();																						// If get doesn't succeed, some error ocurred and we need to report it and return false.
 		format::initEndl();
-		std::cout << format::error									// TODO: Now that the colors are initialized so late, we have no way of knowing in this function if the colors are initialized or not. You have do redesign the coloring and error system for this to work smoothly. Do that.
+		//std::cout << format::error									// TODO: Now that the colors are initialized so late, we have no way of knowing in this function if the colors are initialized or not. You have do redesign the coloring and error system for this to work smoothly. Do that.
 
 #else
 		while (true) {
