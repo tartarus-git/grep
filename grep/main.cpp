@@ -403,10 +403,13 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 	static bool readLine(std::string& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
 #ifdef PLATFORM_WINDOWS
-		if (std::getline(std::cin, line)) { return !std::cin.eof(); }												// Get line. If get succeeds, we still need to check if we just read at EOF and return appropriate value.
-		format::initError();																						// If get doesn't succeed, some error ocurred and we need to report it and return false.
-		format::initEndl();
+		// TODO: Check if the below handling of getline makes sense, look in the docs for when exactly getline triggers what flag and if its like I say it is. Also do some tests.
+		if (std::getline(std::cin, line)) { return true; }															// Get line. Technically, eofbit gets set if EOF terminates the line, but we don't worry about that because in that case we have to return true as well.
+		if (std::cin.eof()) { return false; }																		// If getline fails because we're trying to read at the EOF position (in which case eofbit will be set), return false without doing error reporting.
+		//format::initError();																						// If get doesn't succeed, some error ocurred and we need to report it and return false.
+		//format::initEndl();
 		//std::cout << format::error									// TODO: Now that the colors are initialized so late, we have no way of knowing in this function if the colors are initialized or not. You have do redesign the coloring and error system for this to work smoothly. Do that.
+		return false;
 
 #else
 		while (true) {
