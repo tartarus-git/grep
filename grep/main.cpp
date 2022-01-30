@@ -24,7 +24,7 @@
 #else
 #include <cerrno.h>																										// Gives us access to errno global variable for reading errors from certain functions.
 #include <unistd.h>																										// Linux isatty function is in here as well as some other useful stuff for this program as well I think.
-#include <fcntl.h>																										// File control function used in InputStream to set console input to non-blocking.
+#include <fcntl.h>																										// File control function used in InputStream to set console input to non-blocking.			// TODO: We don't need this anymore do we? See which of these includes you can get rid of.
 #endif
 
 #include <chrono>																										// For access to time durations for use with sleep_for().
