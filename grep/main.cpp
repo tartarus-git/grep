@@ -403,12 +403,13 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 	static bool readLine(std::string& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
 #ifdef PLATFORM_WINDOWS
-		// TODO: Check if the below handling of getline makes sense, look in the docs for when exactly getline triggers what flag and if its like I say it is. Also do some tests.
 		if (std::getline(std::cin, line)) { return true; }															// Get line. Technically, eofbit gets set if EOF terminates the line, but we don't worry about that because in that case we have to return true as well.
+		// NOTE: Technically, one could put the below line above std::getline, but that would do an unnecessary branch for every readLine in the file. This way, the branch is only tested when it has to be, which induces small overhead at EOF but saves a bunch of overhead in the loops.
 		if (std::cin.eof()) { return false; }																		// If getline fails because we're trying to read at the EOF position (in which case eofbit will be set), return false without doing error reporting.
-		//format::initError();																						// If get doesn't succeed, some error ocurred and we need to report it and return false.
-		//format::initEndl();
-		//std::cout << format::error									// TODO: Now that the colors are initialized so late, we have no way of knowing in this function if the colors are initialized or not. You have do redesign the coloring and error system for this to work smoothly. Do that.
+		format::initError();																						// Otherwise, some error occurred and we need to report it and return false.
+		format::initEndl();
+		std::cout << format::error << "failed to read from stdin" << format::endl;
+		format::release();
 		return false;
 
 #else
@@ -428,10 +429,14 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		char character;
 		while (true) {																								// Not going to check for shouldLoopRun here because interrupting inside of a line isn't something that readLine offers either and because console is line-buffered anyway, so it wouldn't actually enable signalling while input is pending.
 			character = std::cin.get();																				// Processing characters once they've been submitted by user is super fast, so the check would be pretty much unnecessary unless the lines are super super super long, which doesn't happen often.
-			if (std::cin.eof()) { return false; }																	// Even if the lines are long, all you'll have to do is press Ctrl+C and wait for the line to be over for grep to quit. This is all so unlikely, that I'm not going to waste a branch checking for it.
-										// TODO: You need to put a check for cin.fail() here and output an error message before returning false.
-			// TODO: Also, check if the colors are even necessary for errors. If we direct the error output to cerr, will that automatically be colored red by powershell?
-				// TODO: Is that a good idea? We should probs keep it so that programs later in the pipe can rely on getting our error information.
+			if (character == EOF) { return false; }																	// Even if the lines are long, all you'll have to do is press Ctrl+C and wait for the line to be over for grep to quit. This is all so unlikely, that I'm not going to waste a branch checking for it.
+			if (std::cin.fail()) {
+				format::initError();
+				format::initEndl();
+				std::cout << format::error << "failed to read from stdin" << format::endl;
+				format::release();
+				return false;
+			}
 			if (character == '\n') { return true; }
 		}
 #else
@@ -567,6 +572,7 @@ int main(int argc, char** argv) {
 		if (flags::context) {
 			if (flags::only_line_nums) {
 				if (flags::inverted) {
+					isOutputColored = false;																												// Necessary so that error reporting doesn't assume that we have colors set up.
 					LINE_WHILE_START
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
 							HistoryBuffer::purgeAmountFilled();
@@ -613,6 +619,7 @@ int main(int argc, char** argv) {
 			}
 			if (flags::lineNums) {
 				if (flags::inverted) {
+					isOutputColored = false;
 					HistoryBuffer::init();
 					LINE_WHILE_START
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
@@ -663,6 +670,7 @@ int main(int argc, char** argv) {
 				COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 			}
 			if (flags::inverted) {
+				isOutputColored = false;
 				HistoryBuffer::init();
 				LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
@@ -710,6 +718,7 @@ int main(int argc, char** argv) {
 		// So I think the if statement approach is a good one, even though it's technically a very small bit less performant than the switch case approach.
 
 		if (flags::inverted) {
+			isOutputColored = false;
 			if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END }
 			if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
 			LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE } std::cout << line << std::endl; LINE_WHILE_END
