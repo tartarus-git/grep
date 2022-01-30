@@ -5,6 +5,8 @@
 
 #define HISTORY_BUFFER_MAX_LINE_COUNT 63																				// Maximum num of lines storable in history buffer when using --context x flag. Note that the count of history buffer is HISTORY_BUFFER_MAX_LINE_COUNT + 1 because of circular buffer.
 
+// TODO: Make absolutely sure that I'm not including too much.
+
 #include <csignal>																										// Signalling and polling things.
 #ifndef PLATFORM_WINDOWS
 #include <sys/signalfd.h>
@@ -22,9 +24,7 @@
 #include <io.h>																											// Needed for _isatty function.
 #define isatty(x) _isatty(x)																							// Renaming _isatty to isatty so it's the same as the function call in Linux.
 #else
-#include <cerrno.h>																										// Gives us access to errno global variable for reading errors from certain functions.
 #include <unistd.h>																										// Linux isatty function is in here as well as some other useful stuff for this program as well I think.
-#include <fcntl.h>																										// File control function used in InputStream to set console input to non-blocking.			// TODO: We don't need this anymore do we? See which of these includes you can get rid of.
 #endif
 
 #include <chrono>																										// For access to time durations for use with sleep_for().
@@ -391,6 +391,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		}
 		bytesRead = 0;																								// If new data is read, the read head needs to be reset to the beginning of the buffer.
 
+		// TODO: The below comparison gives warnings on gcc. Makes sense, can we stop comparing two different types here?
 		if (bytesReceived == bufferSize) {																			// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
 			size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
 			char* newBuffer = (char*)realloc(buffer, newBufferSize);
