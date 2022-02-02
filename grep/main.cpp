@@ -733,10 +733,12 @@ int main(int argc, char** argv) {
 
 	if (flags::allLines) {
 		if (flags::inverted) { return 0; }
-		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE(return 0;) std::cout << lineCounter << std::endl; lineCounter++; } }
+		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE(return 0;) std::cout << lineCounter << std::endl; lineCounter++; } }				// TODO: You didn't release the InputStream here. Memory leak. Make this right.
 		if (flags::lineNums) { LINE_WHILE_START std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
 		LINE_WHILE_START std::cout << line << std::endl; LINE_WHILE_END
 	}
+
+	// TODO: NOTE: I can't figure out why the one line at the end is gone (the correct bahaviour) when you run the master branch and but it's there in the temp branch. The bahaviour should be the same just from looking at the code, what am I missing?
 
 	if (flags::context) {
 		if (flags::only_line_nums) {
