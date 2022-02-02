@@ -408,6 +408,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 #ifdef PLATFORM_WINDOWS
 		if (std::getline(std::cin, line)) { return true; }															// Get line. Technically, eofbit gets set if EOF terminates the line, but we don't worry about that because in that case we have to return true as well.
 		// NOTE: Technically, one could put the below line above std::getline, but that would do an unnecessary branch for every readLine in the file. This way, the branch is only tested when it has to be, which induces small overhead at EOF but saves a bunch of overhead in the loops.
+		// NOTE: More importantly, that only works if you assume that the last line of the file ends with EOF, but it might end in newline, in which case this is the better way to do it because it doesn't print an extra line at the bottom of the output.
 		if (std::cin.eof()) { return false; }																		// If getline fails because we're trying to read at the EOF position (in which case eofbit will be set), return false without doing error reporting.
 		format::initError();																						// Otherwise, some error occurred and we need to report it and return false.
 		format::initEndl();
@@ -737,8 +738,6 @@ int main(int argc, char** argv) {
 		if (flags::lineNums) { LINE_WHILE_START std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
 		LINE_WHILE_START std::cout << line << std::endl; LINE_WHILE_END
 	}
-
-	// TODO: NOTE: I can't figure out why the one line at the end is gone (the correct bahaviour) when you run the master branch and but it's there in the temp branch. The bahaviour should be the same just from looking at the code, what am I missing?
 
 	if (flags::context) {
 		if (flags::only_line_nums) {
