@@ -402,6 +402,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 	}
 #endif
 
+	// TODO: Do those TODO's from the diff source code in here.
+
 	static bool readLine(std::string& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
 #ifdef PLATFORM_WINDOWS
 		if (std::getline(std::cin, line)) { return true; }															// Get line. Technically, eofbit gets set if EOF terminates the line, but we don't worry about that because in that case we have to return true as well.

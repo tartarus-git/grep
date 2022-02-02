@@ -2,7 +2,9 @@ function validateTestResult {
     param($template, $testResult)
     if (!(git diff --no-index $template $testResult)) { Write-Host "test passed"; return }
     Write-Host "TEST FAILED"
-    git diff --no-index $template $testResult
+    #git diff --no-index $template $testResult
+    .\nfilediff.exe $template $testResult
+    exit
 }
 
 $global:index = 0
