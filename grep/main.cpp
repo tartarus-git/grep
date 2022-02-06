@@ -301,7 +301,6 @@ void manageArgs(int argc, char** argv) {
 	case 0:
 		initOutputStyling();
 		std::cout << format::error << "too few arguments" << format::endl;
-		showHelp();
 		releaseOutputStyling();
 		exit(EXIT_SUCCESS);
 	case 1:
