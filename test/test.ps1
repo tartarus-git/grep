@@ -43,10 +43,10 @@ test --context 1 -cal a
 test --context 1 -cl A
 
 test --context 5 -v a
-#test --context 5 -v -a a
-#test --context 5 -v -c a
-#test --context 5 -v -ca a
-#test --context 5 -v -l a
-#test --context 5 -v -al a
-#test --context 5 -v -cal a
-#test --context 5 -v -cl a
+test --context 5 -v -a a
+test --context 1 -v -c a
+test --context 1 -v -ca a
+test --context 1 -v -l a
+test --context 1 -v -al a
+test --context 1 -v -cal a
+test --context 1 -v -cl a
