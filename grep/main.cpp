@@ -63,64 +63,23 @@ const char* helpText = "grep accepts text as input and outputs the lines from th
 bool isOutputColored;
 
 // Output coloring.
-namespace color {				// TODO: Remove crazy formatting complexity and just make each log line a little bit longer, like the TODO says in the nfilediff code.
-	char* red;
+namespace color {
+	char* red = nullptr;										// NOTE: The nullptr is needed so that error reporting subroutines know if they need to allocate colors or if it has been done for them already.
 	void unsafeInitRed() { red = new char[ANSI_ESC_CODE_MIN_SIZE + 2 + 1]; memcpy(red, ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 2 + 1); }
 	void unsafeInitPipedRed() { red = new char; *red = '\0'; }
-	void initRed() { if (isOutputColored) { unsafeInitRed(); return; } unsafeInitPipedRed(); }
 
 	char* reset;
 	void unsafeInitReset() { reset = new char[ANSI_ESC_CODE_MIN_SIZE + 1 + 1]; memcpy(reset, ANSI_ESC_CODE_PREFIX "0" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 1 + 1); }
 	void unsafeInitPipedReset() { reset = new char; *reset = '\0'; }
-	void initReset() { if (isOutputColored) { unsafeInitReset(); return; } unsafeInitPipedReset(); }
+
+	void initErrorColoring() { if (isOutputColored) { unsafeInitRed(); unsafeInitReset(); return; } unsafeInitPipedRed(); unsafeInitPipedReset(); }
 
 	void release() { delete[] color::red; delete[] color::reset; }
 }
 
 // Output formatting.
 namespace format {
-	char* error;
-	void initError() {
-		if (isOutputColored) {
-			error = new char[ANSI_ESC_CODE_MIN_SIZE + 2 + 7 + 1];
-			memcpy(error, color::red, ANSI_ESC_CODE_MIN_SIZE + 2);
-			memcpy(error + ANSI_ESC_CODE_MIN_SIZE + 2, "ERROR: ", 7 + 1);
-			return;
-		}
-		error = new char[7 + 1];
-		memcpy(error, "ERROR: ", 7 + 1);
-	}
-
-	char* endl;
-	void initEndl() {
-		if (isOutputColored) {
-			endl = new char[ANSI_ESC_CODE_MIN_SIZE + 1 + 1 + 1];
-			memcpy(endl, color::reset, ANSI_ESC_CODE_MIN_SIZE + 1);
-			memcpy(endl + ANSI_ESC_CODE_MIN_SIZE + 1, "\n", 1 + 1);
-			return;
-		}
-		endl = new char[1 + 1];
-		memcpy(endl, "\n", 1 + 1);
-	}
-
-	void release() {
-		delete[] format::error;
-		delete[] format::endl;
-	}
-}
-
-// Helper function to initialize all output coloring and formatting. Basically gets us into a mode where we can output colored error messages.
-void initOutputStyling() {
-	color::initRed();
-	format::initError();
-	color::initReset();
-	format::initEndl();
-}
-
-// Helper function to release all output coloring and formatting.
-void releaseOutputStyling() {
-	format::release();
-	color::release();
+	const char* const error = "ERROR: ";				// TODO: Technically, this would be the most correct way to write this, but I never see anyone write this kind of stuff with 2 const's. Why? Is it just unnecessary in their point of view?
 }
 
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
@@ -221,9 +180,9 @@ void parseFlagGroup(char* arg) {
 		case 'v': flags::inverted = true; break;
 		case '\0': return;
 		default:
-			initOutputStyling();
-			std::cout << format::error << "one or more flag arguments are invalid" << format::endl;
-			releaseOutputStyling();
+			color::initErrorColoring();
+			std::cout << color::red << format::error << "one or more flag arguments are invalid" << color::reset << std::endl;
+			color::release();
 			exit(EXIT_SUCCESS);
 		}
 	}
@@ -247,9 +206,9 @@ unsigned int parseUInt(char* string) {				// TODO: A future improvement would be
 			}
 		}
 	}
-	initOutputStyling();
-	std::cout << format::error << "invalid value for --context flag" << format::endl;
-	releaseOutputStyling();
+	color::initErrorColoring();
+	std::cout << color::red << format::error << "invalid value for --context flag" << color::reset << std::endl;
+	color::release();
 	exit(EXIT_SUCCESS);
 }
 
@@ -269,9 +228,9 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 				if (!strcmp(flagTextStart, "context")) {
 					i++;
 					if (i == argc) {
-						initOutputStyling();
-						std::cout << format::error << "the --context flag was not supplied with a value" << format::endl;
-						releaseOutputStyling();
+						color::initErrorColoring();
+						std::cout << color::red << format::error << "the --context flag was not supplied with a value" << color::reset << std::endl;
+						color::release();
 						exit(EXIT_SUCCESS);
 					}
 					HistoryBuffer::buffer_lastIndex = parseUInt(argv[i]);
@@ -283,24 +242,24 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 				if (!strcmp(flagTextStart, "color")) {
 					i++;
 					if (i == argc) {
-						initOutputStyling();
-						std::cout << format::error << "the --color flag was not supplied with a value" << format::endl;
-						releaseOutputStyling();
+						color::initErrorColoring();
+						std::cout << color::red << format::error << "the --color flag was not supplied with a value" << color::reset << std::endl;
+						color::release();
 						exit(EXIT_SUCCESS);
 					}
 					if (!strcmp(argv[i], "on")) { forcedOutputColoring = true; continue; }
 					if (!strcmp(argv[i], "off")) { forcedOutputColoring = false; continue; }
 					if (!strcmp(argv[i], "auto")) { forcedOutputColoring = isOutputColored; continue; }
-					initOutputStyling();
-					std::cout << format::error << "invalid value for --color flag" << format::endl;
-					releaseOutputStyling();
+					color::initErrorColoring();
+					std::cout << color::red << format::error << "invalid value for --color flag" << color::reset << std::endl;
+					color::release();
 					exit(EXIT_SUCCESS);
 				}
 				if (!strcmp(flagTextStart, "help")) { showHelp(); exit(EXIT_SUCCESS); }
 				if (!strcmp(flagTextStart, "h")) { showHelp(); exit(EXIT_SUCCESS); }
-				initOutputStyling();
-				std::cout << format::error << "one or more flag arguments is invalid" << format::endl;
-				releaseOutputStyling();
+				color::initErrorColoring();
+				std::cout << color::red << format::error << "one or more flag arguments is invalid" << color::reset << std::endl;
+				color::release();
 				exit(EXIT_SUCCESS);
 			}
 			parseFlagGroup(argv[i] + 1);
@@ -318,9 +277,9 @@ void manageArgs(int argc, char** argv) {
 	unsigned int keyphraseArgIndex = parseFlags(argc, argv);														// Parse flags before doing anything else.
 	switch (argc - keyphraseArgIndex) {
 	case 0:
-		initOutputStyling();
-		std::cout << format::error << "too few arguments" << format::endl;
-		releaseOutputStyling();
+		color::initErrorColoring();
+		std::cout << color::red << format::error << "too few arguments" << color::reset << std::endl;
+		color::release();
 		exit(EXIT_SUCCESS);
 	case 1:
 		isOutputColored = forcedOutputColoring;																		// If everything went great with parsing the cmdline args, finally set output coloring to what the user wants it to be. It is necessary to do this here because of the garantee that we wrote above.
@@ -329,17 +288,17 @@ void manageArgs(int argc, char** argv) {
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
 			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }								// Parse regex keyphrase.
 			catch (const std::regex_error& err) {																	// Catch any errors relating to keyphrase regex syntax and report them.
-				initOutputStyling();
-				std::cout << format::error << "regex error: " << err.what() << format::endl;
-				releaseOutputStyling();
+				color::initErrorColoring();
+				std::cout << color::red << format::error << "regex error: " << err.what() << color::reset << std::endl;
+				color::release();
 				exit(EXIT_SUCCESS);
 			}
 		}
 		return;
 	default:																										// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
-		initOutputStyling();
-		std::cout << format::error << "too many arguments" << format::endl;
-		releaseOutputStyling();
+		color::initErrorColoring();
+		std::cout << color::red << format::error << "too many arguments" << color::reset << std::endl;
+		color::release();
 		exit(EXIT_SUCCESS);
 	}
 }
@@ -429,10 +388,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		// NOTE: Technically, one could put the below line above std::getline, but that would do an unnecessary branch for every readLine in the file. This way, the branch is only tested when it has to be, which induces small overhead at EOF but saves a bunch of overhead in the loops.
 		// NOTE: More importantly, that only works if you assume that the last line of the file ends with EOF, but it might end in newline, in which case this is the better way to do it because it doesn't print an extra line at the bottom of the output.
 		if (std::cin.eof()) { return false; }																		// If getline fails because we're trying to read at the EOF position (in which case eofbit will be set), return false without doing error reporting.
-		format::initError();																						// Otherwise, some error occurred and we need to report it and return false.
-		format::initEndl();
-		std::cout << format::error << "failed to read from stdin" << format::endl;
-		format::release();
+		if (!color::red) { color::initErrorColoring(); }															// Otherwise, some error occurred and we need to report it and return false.
+		std::cout << color::red << format::error << "failed to read from stdin" << color::reset << std::endl;
 		return false;
 
 #else
@@ -454,10 +411,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			character = std::cin.get();																				// Processing characters once they've been submitted by user is super fast, so the check would be pretty much unnecessary unless the lines are super super super long, which doesn't happen often.
 			if (character == EOF) { return false; }																	// Even if the lines are long, all you'll have to do is press Ctrl+C and wait for the line to be over for grep to quit. This is all so unlikely, that I'm not going to waste a branch checking for it.
 			if (std::cin.fail()) {
-				format::initError();
-				format::initEndl();
-				std::cout << format::error << "failed to read from stdin" << format::endl;
-				format::release();
+				if (!color::red) { color::initErrorColoring(); }
+				std::cout << color::red << format::error << "failed to read from stdin" << color::reset << std::endl;
 				return false;
 			}
 			if (character == '\n') { return true; }
@@ -572,8 +527,11 @@ int main(int argc, char** argv) {
 		// NOTE: Since this overhead is so incredibly small and only transpires one single time, there is essentially no cost, which is why I'm ok with not moving it. SIDE-NOTE: Yes, we could use a function for this, but that still produces less pretty code than the current situation.
 
 		isOutputColored = true;
+		forcedOutputColoring = true;
 	}
-	else { isOutputColored = false; }
+	else { isOutputColored = false; forcedOutputColoring = false; }
+
+	// NOTE: The reason we set the forcedOutputColoring as well as the isOutputColored flag above is because we set isOutputColored to forcedOutputColoring later in the code and we don't want that operation to mess up our coloring code.
 
 	manageArgs(argc, argv);
 
@@ -601,7 +559,6 @@ int main(int argc, char** argv) {
 		if (flags::context) {
 			if (flags::only_line_nums) {
 				if (flags::inverted) {
-					isOutputColored = false;																												// Necessary so that error reporting doesn't assume that we have colors set up.
 					LINE_WHILE_START
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
 							HistoryBuffer::purgeAmountFilled();
@@ -648,7 +605,6 @@ int main(int argc, char** argv) {
 			}
 			if (flags::lineNums) {
 				if (flags::inverted) {
-					isOutputColored = false;
 					HistoryBuffer::init();
 					LINE_WHILE_START
 						if (std::regex_search(line, matchData, keyphraseRegex)) {
@@ -699,7 +655,6 @@ int main(int argc, char** argv) {
 				COLORED_LINE_WHILE_END_INNER HistoryBuffer::release(); return 0;
 			}
 			if (flags::inverted) {
-				isOutputColored = false;
 				HistoryBuffer::init();
 				LINE_WHILE_START
 					if (std::regex_search(line, matchData, keyphraseRegex)) {
@@ -747,7 +702,6 @@ int main(int argc, char** argv) {
 		// So I think the if statement approach is a good one, even though it's technically a very small bit less performant than the switch case approach.
 
 		if (flags::inverted) {
-			isOutputColored = false;
 			if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END }
 			if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << line << std::endl; lineCounter++; LINE_WHILE_END }
 			LINE_WHILE_START if (std::regex_search(line, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE } std::cout << line << std::endl; LINE_WHILE_END
