@@ -211,8 +211,6 @@ unsigned int HistoryBuffer::beginIndex = 0;
 unsigned int HistoryBuffer::buffer_lastIndex;
 unsigned int HistoryBuffer::amountFilled = 0;
 
-// NOTE: 
-
 // Parse a single flag group. A flag group is made out of a bunch of single letter flags.
 void parseFlagGroup(char* arg) {
 	for (int i = 0; ; i++) {
