@@ -47,8 +47,8 @@
 
 const char* helpText = "grep accepts text as input and outputs the lines from the input that have the specified keyphrase in them\n" \
 					   "\n" \
-					   "usage: grep [-calv] [--context <amount> || --only-line-nums] <regex keyphrase>\n" \
-					   "       grep <--help|--h>            -->            shows help text\n" \
+					   "usage: grep [-calv] [--context <amount> || --only-line-nums || --color <auto|on|off>] <regex keyphrase>\n" \
+					   "       grep <--help || --h>            -->            shows help text\n" \
 					   "\n" \
 					   "arguments:\n" \
 							"\t-c                           -->         be case sensitive when matching\n" \
@@ -56,13 +56,14 @@ const char* helpText = "grep accepts text as input and outputs the lines from th
 							"\t-l                           -->         print line numbers\n" \
 							"\t-v                           -->         invert output - print lines that would normally be omitted and omit lines that would normally be printed\n" \
 							"\t--context <amount>           -->         print the specified amount of context (in lines) around each matched line\n" \
-							"\t--only-line-nums             -->         print only the line numbers, not the actual lines\n";
+							"\t--only-line-nums             -->         print only the line numbers, not the actual lines\n" \
+							"\t--color <auto|on|off>        -->         force a specific coloring behaviour, auto is default";
 
 // Flag to keep track of whether we should color output or not. Can also be used for testing if output is a TTY or not.
-bool isOutputColored;						// TODO: In order to make testing the command programmatically easier, add a command line flag that overrides the default choice for isOutputColored and lets the user decide.
+bool isOutputColored;
 
 // Output coloring.
-namespace color {
+namespace color {				// TODO: Remove crazy formatting complexity and just make each log line a little bit longer, like the TODO says in the nfilediff code.
 	char* red;
 	void unsafeInitRed() { red = new char[ANSI_ESC_CODE_MIN_SIZE + 2 + 1]; memcpy(red, ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX, ANSI_ESC_CODE_MIN_SIZE + 2 + 1); }
 	void unsafeInitPipedRed() { red = new char; *red = '\0'; }
@@ -210,6 +211,8 @@ unsigned int HistoryBuffer::beginIndex = 0;
 unsigned int HistoryBuffer::buffer_lastIndex;
 unsigned int HistoryBuffer::amountFilled = 0;
 
+// NOTE: 
+
 // Parse a single flag group. A flag group is made out of a bunch of single letter flags.
 void parseFlagGroup(char* arg) {
 	for (int i = 0; ; i++) {
@@ -255,8 +258,10 @@ unsigned int parseUInt(char* string) {				// TODO: A future improvement would be
 // Show help, but only if our output is connected to a TTY. This is simply to be courteous to any programs that might be receiving our stdout through a pipe.
 void showHelp() { if (isOutputColored) { std::cout << helpText << std::endl; } }
 
+bool forcedOutputColoring;					// NOTE: GARANTEE: If something goes wrong while parsing the cmdline args and an error message is necessary, the error message will always be printed with the default coloring (based on TTY/piped mode).
+
 // Parse flags at the argument level. Calls parseFlagGroup if it encounters flag groups and handles word flags (those with -- in front) separately.
-unsigned int parseFlags(int argc, char** argv) {
+unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you write --context twice or --color twice (or any additional flags that we may add), the value supplied to the rightmost instance will be the value that is used. Does not throw an error.
 	for (int i = 1; i < argc; i++) {
 		const char* arg = argv[i];
 		if (arg[0] == '-') {
@@ -277,6 +282,22 @@ unsigned int parseFlags(int argc, char** argv) {
 					continue;
 				}
 				if (!strcmp(flagTextStart, "only-line-nums")) { flags::only_line_nums = true; continue; }
+				if (!strcmp(flagTextStart, "color")) {
+					i++;
+					if (i == argc) {
+						initOutputStyling();
+						std::cout << format::error << "the --color flag was not supplied with a value" << format::endl;
+						releaseOutputStyling();
+						exit(EXIT_SUCCESS);
+					}
+					if (!strcmp(argv[i], "on")) { forcedOutputColoring = true; continue; }
+					if (!strcmp(argv[i], "off")) { forcedOutputColoring = false; continue; }
+					if (!strcmp(argv[i], "auto")) { forcedOutputColoring = isOutputColored; continue; }
+					initOutputStyling();
+					std::cout << format::error << "invalid value for --color flag" << format::endl;
+					releaseOutputStyling();
+					exit(EXIT_SUCCESS);
+				}
 				if (!strcmp(flagTextStart, "help")) { showHelp(); exit(EXIT_SUCCESS); }
 				if (!strcmp(flagTextStart, "h")) { showHelp(); exit(EXIT_SUCCESS); }
 				initOutputStyling();
@@ -304,6 +325,7 @@ void manageArgs(int argc, char** argv) {
 		releaseOutputStyling();
 		exit(EXIT_SUCCESS);
 	case 1:
+		isOutputColored = forcedOutputColoring;																		// If everything went great with parsing the cmdline args, finally set output coloring to what the user wants it to be. It is necessary to do this here because of the garantee that we wrote above.
 		{																											// Unnamed namespace because we can't create variables inside switch cases otherwise.
 			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::nosubs | std::regex_constants::optimize;
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
@@ -525,6 +547,8 @@ void highlightMatches() {																							// I assume this will be inlined
 #define INNER_INPUT_STREAM_DISCARD_LINE(releasingCode) if (!InputStream::discardLine()) { InputStream::release(); releasingCode }
 #endif
 
+// TODO: See if we should put in some error messages for if allocation fails or if we should just silently fail and let the OS take care of everything.
+
 // TODO: Learn about SFINAE and std::enable_if.
 
 // Program entry point
@@ -540,11 +564,15 @@ int main(int argc, char** argv) {
 	if (isatty(STDOUT_FILENO)) {
 #ifdef PLATFORM_WINDOWS						// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
 		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }
+		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }				// NOTE: Presumably, if this fails, then outputting to stdout probably will fail to, so why bother. Return EXIT_FAILURE instead. Since we don't return that anywhere else, it should actually be a good indicator of what happened.
 		DWORD mode;
-		if (!GetConsoleMode(consoleOutputHandle, &mode)) { return EXIT_FAILURE; }
-		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { return EXIT_FAILURE; }
+		if (!GetConsoleMode(consoleOutputHandle, &mode)) { return EXIT_FAILURE; }										// NOTE: Same deal as above AFAIK. These functions shouldn't really ever fail, so preparing an error output feels kind of weird. We use the error outputs for things that the user did wrong, so that might be why I have a problem with outputting on OS error.
+		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { return EXIT_FAILURE; }	// NOTE: I don't totally know. TODO: Think it through again, maybe you should output errors here.
 #endif
+
+		// NOTE: Technically, it would be more efficient to place the above virtual terminal processing code in a place where we know for sure whether or not we are going to be using colors. That would require writing it multiple times though and the code wouldn't look as nice.
+		// NOTE: Since this overhead is so incredibly small and only transpires one single time, there is essentially no cost, which is why I'm ok with not moving it. SIDE-NOTE: Yes, we could use a function for this, but that still produces less pretty code than the current situation.
+
 		isOutputColored = true;
 	}
 	else { isOutputColored = false; }
