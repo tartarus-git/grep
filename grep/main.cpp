@@ -743,7 +743,7 @@ int main(int argc, char** argv) {
 
 	if (flags::allLines) {
 		if (flags::inverted) { return 0; }
-		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE() std::cout << lineCounter << std::endl; lineCounter++; } }					// NOTE: At first glance, it looks like InputStream isn't being released here, but it is. This code is completely fine.
+		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE() std::cout << lineCounter << std::endl; lineCounter++; } }					// NOTE: At first glance, it looks like InputStream and HistoryBuffer aren't being released here, but they are. This code is completely fine.
 		if (flags::lineNums) { LINE_WHILE_START std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << std::endl; lineCounter++; LINE_WHILE_END() }
 		LINE_WHILE_START std::cout << CURRENT_LINE_ALIAS << std::endl; LINE_WHILE_END()
 	}
