@@ -244,8 +244,7 @@ unsigned int parseUInt(char* string) {				// TODO: A future improvement would be
 	exit(EXIT_SUCCESS);
 }
 
-// Show help, but only if our output is connected to a TTY. This is simply to be courteous to any programs that might be receiving our stdout through a pipe.
-void showHelp() { if (isOutputColored) { std::cout << helpText << std::endl; } }
+void showHelp() { std::cout << helpText << std::endl; }				// NOTE: I have previously only shown help when output is connected to TTY, so as not to pollute stdout when piping. Back then, help was shown sometimes when it wasn't requested, which made it prudent to include that feature. Now, you have to explicitly ask for help, making this TTY branching unnecessary.
 
 bool forcedOutputColoring;					// NOTE: GARANTEE: If something goes wrong while parsing the cmdline args and an error message is necessary, the error message will always be printed with the default coloring (based on TTY/piped mode).
 
