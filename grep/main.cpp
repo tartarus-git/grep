@@ -500,7 +500,7 @@ void highlightMatches() {																							// I assume this will be inlined
 
 #define LINE_WHILE_START MAIN_WHILE { if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { break; }					// TODO: This could be a little bit suboptimal because of the dereferencing, which has to be done over and over because index is incremented, unless the optimizer optimzes, which shouldn't be too hard technically. Examine the assembly and see if you need to help the compiler along.
 #ifdef PLATFORM_WINDOWS
-#define LINE_WHILE_END(cleanupCode) } cleanupCode; HistoryBuffer::release(); return 0;
+#define LINE_WHILE_END(cleanupCode) } cleanupCode; HistoryBuffer::release(); return 0;								// NOTE: As per the standard, you can use function-style macros while leaving one or more or all of the parameters blank. They just won't be filled with anything and you'll have empty spots, which is exactly the behaviour we want here, so everythings fine.
 #else
 #define LINE_WHILE_END(cleanupCode) line.clear(); } cleanupCode; InputStream::release(); HistoryBuffer::release(); return 0;
 #endif
