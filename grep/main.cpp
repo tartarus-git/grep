@@ -401,7 +401,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
 			char* newBuffer = (char*)realloc(buffer, newBufferSize);
 			if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
-		}
+		}			// TODO: Actually use HISTORY_BUFFER_MAX_SIZE here. Also add parenthesese around the define because thats safer. This is super important, integral stuff that you've just forgotten, get it done.
 
 		return true;
 	}
