@@ -115,7 +115,7 @@ namespace color {
 
 // Output formatting.
 namespace format {
-	const char* const error = "ERROR: ";				// TODO: Technically, this would be the most correct way to write this, but I never see anyone write this kind of stuff with 2 const's. Why? Is it just unnecessary in their point of view?
+	const char* const error = "ERROR: ";	// NOTE: const char* const instead of const char* doesn't always work. In the cases where you intend to change what the const char* pointer points to, const char* allows that while const char* const doesn't. In this case, const char* const is absolutely fine, but a lot of people still don't write it because personal preference and style.
 }
 
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
