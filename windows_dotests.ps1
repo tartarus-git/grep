@@ -1,4 +1,4 @@
 $previousWorkingDir = pwd
 cd $(Join-Path -Path $PSScriptRoot -ChildPath "test")
-./test.ps1
+./windows_test.ps1
 cd $previousWorkingDir
