@@ -378,10 +378,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 	static bool refillBuffer() {
 		// When no more data left in buffer, try get more.
 		if (poll(fds, 2, -1) == -1) {																				// Block until we either get some input on stdin or get either a SIGINT or a SIGTERM.
-			format::initError();
-			format::initEndl();
-			std::cout << format::error << "failed to poll stdin, SIGINT and SIGTERM" << format::endl;
-			format::release();
+			if (!color::red) { color::initErrorColoring(); }
+			std::cout << color::red << format::error << "failed to poll stdin, SIGINT and SIGTERM" << color::reset << std::endl;
 			return false;
 		}
 
@@ -391,10 +389,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 		if (bytesReceived == 0) { return false; }																	// In case of actual EOF, signal EOF.
 		if (bytesReceived == -1) {																					// In case of error, log and signal EOF.
-			format::initError();																					// Assumes the colors are already set up because this is only triggered inside the main loop.
-			format::initEndl();
-			std::cout << format::error << "failed to read from stdin" << format::endl;
-			format::release();
+			if (!color::red) { color::initErrorColoring(); }
+			std::cout << color::red << format::error << "failed to read from stdin" << color::reset << std::endl;
 			return false;
 
 		}
@@ -501,7 +497,7 @@ void highlightMatches() {																							// I assume this will be inlined
 #ifdef PLATFORM_WINDOWS
 #define LINE_WHILE_END(cleanupCode) } cleanupCode; HistoryBuffer::release(); return 0;								// NOTE: As per the standard, you can use function-style macros while leaving one or more or all of the parameters blank. They just won't be filled with anything and you'll have empty spots, which is exactly the behaviour we want here, so everythings fine.
 #else
-#define LINE_WHILE_END(cleanupCode) line.clear(); } cleanupCode; InputStream::release(); HistoryBuffer::release(); return 0;
+#define LINE_WHILE_END(cleanupCode) CURRENT_LINE_ALIAS.clear(); } cleanupCode; InputStream::release(); HistoryBuffer::release(); return 0;
 #endif
 
 #define COLORED_LINE_WHILE_START color::unsafeInitRed(); color::unsafeInitReset(); LINE_WHILE_START
@@ -512,7 +508,7 @@ void highlightMatches() {																							// I assume this will be inlined
 #ifdef PLATFORM_WINDOWS
 #define LINE_WHILE_CONTINUE continue;
 #else
-#define LINE_WHILE_CONTINUE line.clear(); continue;
+#define LINE_WHILE_CONTINUE CURRENT_LINE_ALIAS.clear(); continue;
 #endif
 
 #ifdef PLATFORM_WINDOWS
