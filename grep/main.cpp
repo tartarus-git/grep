@@ -70,7 +70,9 @@ If you want to process a huge array in parallel, GPU computing is the way to go,
 
 Another concept that builds on SIMD: SWAR (SIMD Within A Register):
 Very simple AFAIK. It is basically just more instructions, which also act like SIMD instructions, but they use data units that are smaller than normal for example (or registers that are larger than normal), to process multiple data within the one register.
-Effectively does the same thing as SIMD, I'm not really sure why it warrants it's own acronym. TODO: Research if there are any benefits to SWAR that normal SIMD doesn't have.
+Effectively does the same thing as SIMD, I'm not really sure why it warrants it's own acronym.
+
+Beneifts of SWAR over SIMD: The benefits come only from the fact that, through sacrificing resolution of your values (moving from whole words to partial words), you can process more values in parallel AFAIK, which is faster.
 
 */
 
@@ -91,7 +93,7 @@ const char* helpText = "grep accepts text as input and outputs the lines from th
 							"\t-v                           -->         invert output - print lines that would normally be omitted and omit lines that would normally be printed\n" \
 							"\t--context <amount>           -->         print the specified amount of context (in lines) around each matched line\n" \
 							"\t--only-line-nums             -->         print only the line numbers, not the actual lines\n" \
-							"\t--color <auto|on|off>        -->         force a specific coloring behaviour, auto is default";
+							"\t--color <auto|on|off>        -->         force a specific coloring behaviour, auto is default\n";
 
 // Flag to keep track of whether we should color output or not. Can also be used for testing if output is a TTY or not.
 bool isOutputColored;
@@ -168,7 +170,7 @@ public:
 
 	static void purgeWithAmountSet() { purge(); purgeAmountFilled(); }
 
-	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout << buffer[beginIndex] << std::endl; } }
+	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout << buffer[beginIndex] << '\n'; } }			// NOTE: It is important to use '\n' instead of std::endl because std::endl puts a newline into the stream but also flushes it, which is a syscall, which is super slow. '\n' doesn't flush, so faster.
 
 	// NOTE: We could store the amount filled and edit the variable with every call to push(), but I doubt that would be efficient since push is called so many more times than print is (at least normally).
 	// Doing that would cause amountFilled to be added to over and over with little return on the investment. That's why we're just calculating amountFilled every time we need it, that way push() doesn't have to waste it's time incrementing anything.
@@ -179,13 +181,13 @@ public:
 	static void printLinesWithLineNums() {
 		if (index == beginIndex) { return; }
 		lineCounter -= calculateAmountFilled();
-		std::cout << lineCounter << ' ' << buffer[beginIndex] << std::endl;
+		std::cout << lineCounter << ' ' << buffer[beginIndex] << '\n';
 		lineCounter++;
 		beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1);
-		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) { std::cout << lineCounter << ' ' << buffer[beginIndex] << std::endl; }
+		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) { std::cout << lineCounter << ' ' << buffer[beginIndex] << '\n'; }
 	}
 
-	static void lastPrintLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << std::endl; } }
+	static void lastPrintLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << '\n'; } }
 	static void printLineNums() { lastPrintLineNums(); purgeAmountFilled(); }
 
 	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }
@@ -213,7 +215,7 @@ void parseFlagGroup(char* arg) {
 		case '\0': return;
 		default:
 			color::initErrorColoring();
-			std::cout << color::red << format::error << "one or more flag arguments are invalid" << color::reset << std::endl;
+			std::cout << color::red << format::error << "one or more flag arguments are invalid" << color::reset << '\n';				// TODO: If it weren't for that windows C++ runtime thing where it puts another newline at the end, I would integrate the \n directly into the string. Is that still possible somehow on windows? Do we have to move away from ANSI escape codes for colors.
 			color::release();
 			exit(EXIT_SUCCESS);
 		}
@@ -227,7 +229,7 @@ bool addToUInt(unsigned int& value, char character) {
 	return true;
 }
 
-unsigned int parseUInt(char* string) {				// TODO: A future improvement would be to offset the line from the line number differently based on how many digits the number has in the console. So that lines don't start nudging to the right when going from line 99 to line 100. 
+unsigned int parseUInt(char* string) {
 	unsigned int result = 0;
 	if (string[0] != '\0') {
 		if (addToUInt(result, string[0])) {
@@ -239,12 +241,12 @@ unsigned int parseUInt(char* string) {				// TODO: A future improvement would be
 		}
 	}
 	color::initErrorColoring();
-	std::cout << color::red << format::error << "invalid value for --context flag" << color::reset << std::endl;
+	std::cout << color::red << format::error << "invalid value for --context flag" << color::reset << '\n';
 	color::release();
 	exit(EXIT_SUCCESS);
 }
 
-void showHelp() { std::cout << helpText << std::endl; }				// NOTE: I have previously only shown help when output is connected to TTY, so as not to pollute stdout when piping. Back then, help was shown sometimes when it wasn't requested, which made it prudent to include that feature. Now, you have to explicitly ask for help, making this TTY branching unnecessary.
+void showHelp() { std::cout << helpText; }				// NOTE: I have previously only shown help when output is connected to TTY, so as not to pollute stdout when piping. Back then, help was shown sometimes when it wasn't requested, which made it prudent to include that feature. Now, you have to explicitly ask for help, making this TTY branching unnecessary.
 
 bool forcedOutputColoring;					// NOTE: GARANTEE: If something goes wrong while parsing the cmdline args and an error message is necessary, the error message will always be printed with the default coloring (based on TTY/piped mode).
 
@@ -260,7 +262,7 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 					i++;
 					if (i == argc) {
 						color::initErrorColoring();
-						std::cout << color::red << format::error << "the --context flag was not supplied with a value" << color::reset << std::endl;
+						std::cout << color::red << format::error << "the --context flag was not supplied with a value" << color::reset << '\n';
 						color::release();
 						exit(EXIT_SUCCESS);
 					}
@@ -274,7 +276,7 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 					i++;
 					if (i == argc) {
 						color::initErrorColoring();
-						std::cout << color::red << format::error << "the --color flag was not supplied with a value" << color::reset << std::endl;
+						std::cout << color::red << format::error << "the --color flag was not supplied with a value" << color::reset << '\n';
 						color::release();
 						exit(EXIT_SUCCESS);
 					}
@@ -282,14 +284,14 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 					if (!strcmp(argv[i], "off")) { forcedOutputColoring = false; continue; }
 					if (!strcmp(argv[i], "auto")) { forcedOutputColoring = isOutputColored; continue; }
 					color::initErrorColoring();
-					std::cout << color::red << format::error << "invalid value for --color flag" << color::reset << std::endl;
+					std::cout << color::red << format::error << "invalid value for --color flag" << color::reset << '\n';
 					color::release();
 					exit(EXIT_SUCCESS);
 				}
 				if (!strcmp(flagTextStart, "help")) { showHelp(); exit(EXIT_SUCCESS); }
 				if (!strcmp(flagTextStart, "h")) { showHelp(); exit(EXIT_SUCCESS); }
 				color::initErrorColoring();
-				std::cout << color::red << format::error << "one or more flag arguments is invalid" << color::reset << std::endl;
+				std::cout << color::red << format::error << "one or more flag arguments is invalid" << color::reset << '\n';
 				color::release();
 				exit(EXIT_SUCCESS);
 			}
@@ -309,7 +311,7 @@ void manageArgs(int argc, char** argv) {
 	switch (argc - keyphraseArgIndex) {
 	case 0:
 		color::initErrorColoring();
-		std::cout << color::red << format::error << "too few arguments" << color::reset << std::endl;
+		std::cout << color::red << format::error << "too few arguments" << color::reset << '\n';
 		color::release();
 		exit(EXIT_SUCCESS);
 	case 1:
@@ -320,7 +322,7 @@ void manageArgs(int argc, char** argv) {
 			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }								// Parse regex keyphrase.
 			catch (const std::regex_error& err) {																	// Catch any errors relating to keyphrase regex syntax and report them.
 				color::initErrorColoring();
-				std::cout << color::red << format::error << "regex error: " << err.what() << color::reset << std::endl;
+				std::cout << color::red << format::error << "regex error: " << err.what() << color::reset << '\n';
 				color::release();
 				exit(EXIT_SUCCESS);
 			}
@@ -328,11 +330,13 @@ void manageArgs(int argc, char** argv) {
 		return;
 	default:																										// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
 		color::initErrorColoring();
-		std::cout << color::red << format::error << "too many arguments" << color::reset << std::endl;
+		std::cout << color::red << format::error << "too many arguments" << color::reset << '\n';
 		color::release();
 		exit(EXIT_SUCCESS);
 	}
 }
+
+// TODO: Go through all your usages of '\n' with std::cout and make sure you can't make any of them simpler by integrating the newline into the string or something.
 
 // Handles input in a buffered way.
 class InputStream {
@@ -379,7 +383,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		// When no more data left in buffer, try get more.
 		if (poll(fds, 2, -1) == -1) {																				// Block until we either get some input on stdin or get either a SIGINT or a SIGTERM.
 			if (!color::red) { color::initErrorColoring(); }
-			std::cout << color::red << format::error << "failed to poll stdin, SIGINT and SIGTERM" << color::reset << std::endl;
+			std::cout << color::red << format::error << "failed to poll stdin, SIGINT and SIGTERM" << color::reset << '\n';
 			return false;
 		}
 
@@ -390,7 +394,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		if (bytesReceived == 0) { return false; }																	// In case of actual EOF, signal EOF.
 		if (bytesReceived == -1) {																					// In case of error, log and signal EOF.
 			if (!color::red) { color::initErrorColoring(); }
-			std::cout << color::red << format::error << "failed to read from stdin" << color::reset << std::endl;
+			std::cout << color::red << format::error << "failed to read from stdin" << color::reset << '\n';
 			return false;
 
 		}
@@ -407,8 +411,6 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 	}
 #endif
 
-	// TODO: Re-make all the linux code with the bug fixes that we did in the windows code. Obviously read through it and be super careful, but the major main thing is just the coloring redesign, which should be pretty easy to implement.
-
 	static bool readLine(std::string& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
 #ifdef PLATFORM_WINDOWS
 		if (std::getline(std::cin, line)) { return true; }															// Get line. Technically, eofbit gets set if EOF terminates the line, but we don't worry about that because in that case we have to return true as well.
@@ -416,7 +418,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		// NOTE: More importantly, that only works if you assume that the last line of the file ends with EOF, but it might end in newline, in which case this is the better way to do it because it doesn't print an extra line at the bottom of the output.
 		if (std::cin.eof()) { return false; }																		// If getline fails because we're trying to read at the EOF position (in which case eofbit will be set), return false without doing error reporting.
 		if (!color::red) { color::initErrorColoring(); }															// Otherwise, some error occurred and we need to report it and return false.
-		std::cout << color::red << format::error << "failed to read from stdin" << color::reset << std::endl;
+		std::cout << color::red << format::error << "failed to read from stdin" << color::reset << '\n';
 		return false;
 
 #else
@@ -439,7 +441,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			if (character == EOF) { return false; }																	// Even if the lines are long, all you'll have to do is press Ctrl+C and wait for the line to be over for grep to quit. This is all so unlikely, that I'm not going to waste a branch checking for it.
 			if (std::cin.fail()) {
 				if (!color::red) { color::initErrorColoring(); }
-				std::cout << color::red << format::error << "failed to read from stdin" << color::reset << std::endl;
+				std::cout << color::red << format::error << "failed to read from stdin" << color::reset << '\n';
 				return false;
 			}
 			if (character == '\n') { return true; }
@@ -493,7 +495,7 @@ void highlightMatches() {																							// I assume this will be inlined
 #endif
 
 
-#define LINE_WHILE_START MAIN_WHILE { if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { break; }					// TODO: This could be a little bit suboptimal because of the dereferencing, which has to be done over and over because index is incremented, unless the optimizer optimzes, which shouldn't be too hard technically. Examine the assembly and see if you need to help the compiler along.
+#define LINE_WHILE_START MAIN_WHILE { if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { break; }
 #ifdef PLATFORM_WINDOWS
 #define LINE_WHILE_END(cleanupCode) } cleanupCode; HistoryBuffer::release(); return 0;								// NOTE: As per the standard, you can use function-style macros while leaving one or more or all of the parameters blank. They just won't be filled with anything and you'll have empty spots, which is exactly the behaviour we want here, so everythings fine.
 #else
@@ -527,7 +529,10 @@ void highlightMatches() {																							// I assume this will be inlined
 #define INNER_INPUT_STREAM_DISCARD_LINE(cleanupCode) if (!InputStream::discardLine()) { InputStream::release(); HistoryBuffer::release(); cleanupCode; return 0; }
 #endif
 
-// TODO: See if we should put in some error messages for if allocation fails or if we should just silently fail and let the OS take care of everything.
+// NOTE: I'm not going to put any error handling on allocation fails because that shouldn't actually happen unless there is something wrong with the OS. If it does happen, an abort will be triggered and my program will quit, leaving the OS to clean up all of it's resources, which isn't good practice, but like I said, this shouldn't happen and putting in error handling
+// NOTE: would be kind of awkward in some places. It would even force me to use exceptions as far as I can see (at the copying of one std::string into another), which I don't want to do.
+// NOTE: There is one place where a large enough file would cause memory issues (std::string copying in HistoryBuffer), but I just assume that the user won't put in a huge huge huge file consisting of only one line into a grep program, what would be the use? If he does, then it's his fault and we'll just let the OS clean up, I don't really have a problem with that in that case.
+// NOTE: Plus, like I said, it lets me avoid exception handling.
 
 // TODO: Learn about SFINAE and std::enable_if.
 
@@ -544,10 +549,10 @@ int main(int argc, char** argv) {
 	if (isatty(STDOUT_FILENO)) {
 #ifdef PLATFORM_WINDOWS						// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
 		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }				// NOTE: Presumably, if this fails, then outputting to stdout probably will fail to, so why bother. Return EXIT_FAILURE instead. Since we don't return that anywhere else, it should actually be a good indicator of what happened.
+		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { return EXIT_FAILURE; }				// NOTE: Presumably, if this fails, then outputting to stdout probably will fail too, so why bother signalling error. Return EXIT_FAILURE instead. Since we don't return that anywhere else, it should actually be a good indicator of what happened.
 		DWORD mode;
-		if (!GetConsoleMode(consoleOutputHandle, &mode)) { return EXIT_FAILURE; }										// NOTE: Same deal as above AFAIK. These functions shouldn't really ever fail, so preparing an error output feels kind of weird. We use the error outputs for things that the user did wrong, so that might be why I have a problem with outputting on OS error.
-		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { return EXIT_FAILURE; }	// NOTE: I don't totally know. TODO: Think it through again, maybe you should output errors here.
+		if (!GetConsoleMode(consoleOutputHandle, &mode)) { return EXIT_FAILURE; }										// NOTE: Same deal as above AFAIK. Plus, these functions shouldn't really ever fail, so preparing an error output feels kind of weird. We use the error outputs for things that the user did wrong, so that might be why I have a problem with outputting on OS error.
+		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { return EXIT_FAILURE; }	// NOTE: If these calls fail, something about the OS is off and you should fix that before running the program again, but in normal operation, these should basically never fail. I don't see it as our duty to handle every possible, esoteric error.
 #endif
 
 		// NOTE: Technically, it would be more efficient to place the above virtual terminal processing code in a place where we know for sure whether or not we are going to be using colors. That would require writing it multiple times though and the code wouldn't look as nice.
@@ -572,17 +577,17 @@ int main(int argc, char** argv) {
 			if (flags::inverted) { return 0; }
 			if (flags::only_line_nums) {
 				COLORED_LINE_WHILE_START
-					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << std::endl; lineCounter++; LINE_WHILE_CONTINUE; }
-					std::cout << lineCounter << std::endl; lineCounter++;
+					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
+					std::cout << lineCounter << '\n'; lineCounter++;
 				COLORED_LINE_WHILE_END()
 			}
-			if (flags::lineNums) {
-				COLORED_LINE_WHILE_START
-					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << std::endl; lineCounter++; LINE_WHILE_CONTINUE; }
-					std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS<< std::endl; lineCounter++;
+			if (flags::lineNums) {						// NOTE: One would think that an improvement would be to snap all line numbers to the same column so as to avoid the text shifting to the right when line numbers go from 9 to 10 or from 99 to 100, but thats easier said than done, because we don't actually know how much room to leave in the column before reading the whole file.
+				COLORED_LINE_WHILE_START				// NOTE: Since we should be prepared to read incredibly long files, I'm going to leave the snapping out, since we can't really implement it without giving ourselves a maximum amount of line numbers we can traverse.
+					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
+					std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; lineCounter++;
 				COLORED_LINE_WHILE_END()
 			}
-			COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { highlightMatches(); } std::cout << CURRENT_LINE_ALIAS << std::endl; COLORED_LINE_WHILE_END()
+			COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { highlightMatches(); } std::cout << CURRENT_LINE_ALIAS << '\n'; COLORED_LINE_WHILE_END()
 		}
 
 		if (flags::context) {
@@ -602,7 +607,7 @@ int main(int argc, char** argv) {
 							}
 							LINE_WHILE_CONTINUE;
 						}
-						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << std::endl; }
+						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << '\n'; }
 						HistoryBuffer::incrementAmountFilled();
 						lineCounter++;
 					LINE_WHILE_END(HistoryBuffer::lastPrintLineNums())
@@ -610,19 +615,19 @@ int main(int argc, char** argv) {
 				COLORED_LINE_WHILE_START
 					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
 						HistoryBuffer::printLineNums();
-						std::cout << color::red << lineCounter << color::reset << std::endl;
+						std::cout << color::red << lineCounter << color::reset << '\n';
 						lineCounter++;
 						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {			// SIDE-NOTE: Technically, for a lot of my use-cases, a do-while loop would be more efficient than a for loop since the initial check is garanteed to return true.
 							INNER_WINDOWS_SIGNAL_CHECK_START																									// SIDE-NOTE: Even so, I like the way for loops look because you see the information for the loop at the top and not all the way at the bottom, plus, compiler optimizes.
 								CURRENT_LINE_ALIAS.clear();
 								INNER_INPUT_STREAM_READ_LINE(color::release())
 								if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
-									std::cout << color::red << lineCounter << color::reset << std::endl;
+									std::cout << color::red << lineCounter << color::reset << '\n';
 									lineCounter++;
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
 									continue;
 								}
-								std::cout << lineCounter << std::endl;
+								std::cout << lineCounter << '\n';
 								lineCounter++;
 							INNER_WINDOWS_SIGNAL_CHECK_END(color::release())
 						}
@@ -650,7 +655,7 @@ int main(int argc, char** argv) {
 						}
 						std::string safestLine;
 						if (HistoryBuffer::peekSafestLine(safestLine)) {
-							size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << std::endl; }
+							size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << '\n'; }
 						}
 						HistoryBuffer::pushWithAmountInc();
 						lineCounter++;
@@ -659,19 +664,19 @@ int main(int argc, char** argv) {
 				COLORED_LINE_WHILE_START
 					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
 						HistoryBuffer::printLinesWithLineNums();
-						std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << std::endl;
+						std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n';
 						lineCounter++;
 						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 							INNER_WINDOWS_SIGNAL_CHECK_START
 								CURRENT_LINE_ALIAS.clear();
 								INNER_INPUT_STREAM_READ_LINE(color::release())
 								if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
-									std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << std::endl;
+									std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n';
 									lineCounter++;
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
 									continue;
 								}
-								std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << std::endl;
+								std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n';
 								lineCounter++;
 							INNER_WINDOWS_SIGNAL_CHECK_END(color::release())
 						}
@@ -695,24 +700,24 @@ int main(int argc, char** argv) {
 						}
 						LINE_WHILE_CONTINUE;
 					}
-					std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << std::endl; }
+					std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << '\n'; }
 					HistoryBuffer::pushWithAmountInc();
 				LINE_WHILE_END(HistoryBuffer::print())
 			}
 			COLORED_LINE_WHILE_START
 				if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
 					HistoryBuffer::print();
-					highlightMatches(); std::cout << CURRENT_LINE_ALIAS << std::endl;
+					highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n';
 					for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							CURRENT_LINE_ALIAS.clear();
 							INNER_INPUT_STREAM_READ_LINE(color::release())
 							if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
-								highlightMatches(); std::cout << CURRENT_LINE_ALIAS << std::endl;
+								highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n';
 								padding = HistoryBuffer::buffer_lastIndex;
 								continue;
 							}
-							std::cout << CURRENT_LINE_ALIAS << std::endl;
+							std::cout << CURRENT_LINE_ALIAS << '\n';
 							padding--;
 						INNER_WINDOWS_SIGNAL_CHECK_END(color::release())
 					}
@@ -727,20 +732,20 @@ int main(int argc, char** argv) {
 		// So I think the if statement approach is a good one, even though it's technically a very small bit less performant than the switch case approach.
 
 		if (flags::inverted) {
-			if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END() }
-			if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << std::endl; lineCounter++; LINE_WHILE_END() }
-			LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE } std::cout << CURRENT_LINE_ALIAS << std::endl; LINE_WHILE_END()
+			if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << '\n'; lineCounter++; LINE_WHILE_END() }
+			if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; lineCounter++; LINE_WHILE_END() }
+			LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE } std::cout << CURRENT_LINE_ALIAS << '\n'; LINE_WHILE_END()
 		}
-		if (flags::only_line_nums) { COLORED_RED_ONLY_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << std::endl; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END }
-		if (flags::lineNums) { COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << std::endl; } lineCounter++; COLORED_LINE_WHILE_END() }
-		COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { highlightMatches(); std::cout << CURRENT_LINE_ALIAS << std::endl; } COLORED_LINE_WHILE_END()
+		if (flags::only_line_nums) { COLORED_RED_ONLY_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << '\n'; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END }
+		if (flags::lineNums) { COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; } lineCounter++; COLORED_LINE_WHILE_END() }
+		COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; } COLORED_LINE_WHILE_END()
 	}
 
 	if (flags::allLines) {
 		if (flags::inverted) { return 0; }
-		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE() std::cout << lineCounter << std::endl; lineCounter++; } }					// NOTE: At first glance, it looks like InputStream and HistoryBuffer aren't being released here, but they are. This code is completely fine.
-		if (flags::lineNums) { LINE_WHILE_START std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << std::endl; lineCounter++; LINE_WHILE_END() }
-		LINE_WHILE_START std::cout << CURRENT_LINE_ALIAS << std::endl; LINE_WHILE_END()
+		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE() std::cout << lineCounter << '\n'; lineCounter++; } }					// NOTE: At first glance, it looks like InputStream and HistoryBuffer aren't being released here, but they are. This code is completely fine.
+		if (flags::lineNums) { LINE_WHILE_START std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; lineCounter++; LINE_WHILE_END() }
+		LINE_WHILE_START std::cout << CURRENT_LINE_ALIAS << '\n'; LINE_WHILE_END()
 	}
 
 	if (flags::context) {
@@ -760,7 +765,7 @@ int main(int argc, char** argv) {
 						}
 						LINE_WHILE_CONTINUE;
 					}
-					size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << std::endl; }
+					size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << '\n'; }
 					HistoryBuffer::incrementAmountFilled();
 					lineCounter++;
 				LINE_WHILE_END(HistoryBuffer::lastPrintLineNums())
@@ -768,13 +773,13 @@ int main(int argc, char** argv) {
 			LINE_WHILE_START
 				if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
 					HistoryBuffer::printLineNums();
-					std::cout << lineCounter << std::endl;
+					std::cout << lineCounter << '\n';
 					lineCounter++;
 					for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							CURRENT_LINE_ALIAS.clear();
 							INNER_INPUT_STREAM_READ_LINE()
-							std::cout << lineCounter << std::endl;
+							std::cout << lineCounter << '\n';
 							lineCounter++;
 							if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
 						INNER_WINDOWS_SIGNAL_CHECK_END()
@@ -803,7 +808,7 @@ int main(int argc, char** argv) {
 					}
 					std::string safestLine;
 					if (HistoryBuffer::peekSafestLine(safestLine)) {
-						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << std::endl; }
+						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << '\n'; }
 					}
 					HistoryBuffer::pushWithAmountInc();
 					lineCounter++;
@@ -812,13 +817,13 @@ int main(int argc, char** argv) {
 			LINE_WHILE_START
 				if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
 					HistoryBuffer::printLinesWithLineNums();
-					std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << std::endl;
+					std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n';
 					lineCounter++;
 					for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							CURRENT_LINE_ALIAS.clear();
 							INNER_INPUT_STREAM_READ_LINE()
-							std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << std::endl;
+							std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n';
 							lineCounter++;
 							if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
 						INNER_WINDOWS_SIGNAL_CHECK_END()
@@ -843,24 +848,24 @@ int main(int argc, char** argv) {
 					}
 					LINE_WHILE_CONTINUE;
 				}
-				std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << std::endl; }
+				std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << '\n'; }
 				HistoryBuffer::pushWithAmountInc();
 			LINE_WHILE_END(HistoryBuffer::print())
 		}
 		LINE_WHILE_START
 			if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
 				HistoryBuffer::print();
-				std::cout << CURRENT_LINE_ALIAS << std::endl;
+				std::cout << CURRENT_LINE_ALIAS << '\n';
 				for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 					INNER_WINDOWS_SIGNAL_CHECK_START
 						CURRENT_LINE_ALIAS.clear();
 						INNER_INPUT_STREAM_READ_LINE()
 						if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
-							std::cout << CURRENT_LINE_ALIAS << std::endl;
+							std::cout << CURRENT_LINE_ALIAS << '\n';
 							padding = HistoryBuffer::buffer_lastIndex;
 							continue;
 						}
-						std::cout << CURRENT_LINE_ALIAS << std::endl;
+						std::cout << CURRENT_LINE_ALIAS << '\n';
 						padding--;
 					INNER_WINDOWS_SIGNAL_CHECK_END()
 				}
@@ -871,13 +876,13 @@ int main(int argc, char** argv) {
 	}
 
 	if (flags::inverted) {
-		if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << std::endl; lineCounter++; LINE_WHILE_END() }
-		if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << std::endl; lineCounter++; LINE_WHILE_END() }
-		LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE; } std::cout << CURRENT_LINE_ALIAS << std::endl; LINE_WHILE_END()
+		if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << '\n'; lineCounter++; LINE_WHILE_END() }
+		if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; lineCounter++; LINE_WHILE_END() }
+		LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE; } std::cout << CURRENT_LINE_ALIAS << '\n'; LINE_WHILE_END()
 	}
-	if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << std::endl; } lineCounter++; LINE_WHILE_END() }
-	if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << std::endl; } lineCounter++; LINE_WHILE_END() }
-	LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << CURRENT_LINE_ALIAS << std::endl; } LINE_WHILE_END()
+	if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << '\n'; } lineCounter++; LINE_WHILE_END() }
+	if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; } lineCounter++; LINE_WHILE_END() }
+	LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << CURRENT_LINE_ALIAS << '\n'; } LINE_WHILE_END()
 }
 
 /*
