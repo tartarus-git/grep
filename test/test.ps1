@@ -12,7 +12,7 @@ $global:longestDurationIndex = -1
 $global:longestDuration = -1
 function test {
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    cat ./inputs/source.cpp | ../Debug/grep.exe $args > output.txt
+    cat ./inputs/source.cpp | ../Debug/grep.exe $args | Out-File -Encoding ascii -FilePath output.txt
     $stopwatch.Stop()
 
     Write-Host -NoNewline "$($global:index)  $($stopwatch.Elapsed)  "
