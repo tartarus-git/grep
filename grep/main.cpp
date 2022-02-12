@@ -216,6 +216,7 @@ void parseFlagGroup(char* arg) {
 		default:
 			color::initErrorColoring();
 			std::cout << color::red << format::error << "one or more flag arguments are invalid" << color::reset << '\n';				// TODO: If it weren't for that windows C++ runtime thing where it puts another newline at the end, I would integrate the \n directly into the string. Is that still possible somehow on windows? Do we have to move away from ANSI escape codes for colors.
+			// TODO: Actually, it doesn't seem to be the runtime, it's pesky powershell adding an extra newline to it when it writes it to files using redirection, Out-File or Set-Content, find a way to get around that.
 			color::release();
 			exit(EXIT_SUCCESS);
 		}
@@ -736,6 +737,8 @@ int main(int argc, char** argv) {
 			if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; lineCounter++; LINE_WHILE_END() }
 			LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE } std::cout << CURRENT_LINE_ALIAS << '\n'; LINE_WHILE_END()
 		}
+		// TODO: The following ONLY_RED thing doesn't make sense when your running grep in interactive mode, because then your input text is also colored red, and everything is, and you can't tell where the hits are. So either reset every line, which is inefficient, or reset every line when your in interactive mode and when
+		// we detect that stdin is a pipe connection, we can use the RED_ONLY method.
 		if (flags::only_line_nums) { COLORED_RED_ONLY_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << '\n'; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END }
 		if (flags::lineNums) { COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; } lineCounter++; COLORED_LINE_WHILE_END() }
 		COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; } COLORED_LINE_WHILE_END()
