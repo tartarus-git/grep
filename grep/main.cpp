@@ -316,6 +316,7 @@ void manageArgs(int argc, char** argv) {
 		color::release();
 		exit(EXIT_SUCCESS);
 	case 1:
+	{
 		bool previousOutputColoring = isOutputColored;
 		isOutputColored = forcedOutputColoring;																		// If everything went great with parsing the cmdline args, finally set output coloring to what the user wants it to be. It is necessary to do this here because of the garantee that we wrote above.
 		forcedOutputColoring = previousOutputColoring;						// This is some dirty code to repurpose the forcedOutputColoring variable as the true indicator of if we are connected to TTY or not, you should probably fix this and make a better system. TODO
@@ -330,6 +331,7 @@ void manageArgs(int argc, char** argv) {
 				exit(EXIT_SUCCESS);
 			}
 		}
+	}
 		return;
 	default:																										// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
 		color::initErrorColoring();
