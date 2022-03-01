@@ -461,6 +461,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 #endif
 };
 
+// SUPER IMPORTANT TODO: Why are we not using the same buffering mechanism for windows as for Linux? Something to do with EOF's, but I don't think we understand all the stuff properly when we built this. The whole InputStream class could be improved. Do that.
+
 #ifndef PLATFORM_WINDOWS																							// Static members variables only need to be initialized in Linux because we don't have any in Windows.
 pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };												// Parts of this data get changed later in runtime.
 sigset_t InputStream::sigmask;
