@@ -316,7 +316,10 @@ void manageArgs(int argc, char** argv) {
 		color::release();
 		exit(EXIT_SUCCESS);
 	case 1:
+	{
+		bool previousOutputColoring = isOutputColored;
 		isOutputColored = forcedOutputColoring;																		// If everything went great with parsing the cmdline args, finally set output coloring to what the user wants it to be. It is necessary to do this here because of the garantee that we wrote above.
+		forcedOutputColoring = previousOutputColoring;						// This is some dirty code to repurpose the forcedOutputColoring variable as the true indicator of if we are connected to TTY or not, you should probably fix this and make a better system. TODO
 		{																											// Unnamed namespace because we can't create variables inside switch cases otherwise.
 			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::nosubs | std::regex_constants::optimize;
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
@@ -328,6 +331,7 @@ void manageArgs(int argc, char** argv) {
 				exit(EXIT_SUCCESS);
 			}
 		}
+	}
 		return;
 	default:																										// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
 		color::initErrorColoring();
@@ -741,7 +745,14 @@ int main(int argc, char** argv) {
 		}
 		// TODO: The following ONLY_RED thing doesn't make sense when your running grep in interactive mode, because then your input text is also colored red, and everything is, and you can't tell where the hits are. So either reset every line, which is inefficient, or reset every line when your in interactive mode and when
 		// we detect that stdin is a pipe connection, we can use the RED_ONLY method.
-		if (flags::only_line_nums) { COLORED_RED_ONLY_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << '\n'; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END }
+		// NOTE: I've fixed the above TODO, but it's a pretty dirty fix, you should probably clean up the code before you can call it totally fixed.
+		if (flags::only_line_nums) {
+			if (!forcedOutputColoring) {
+				COLORED_RED_ONLY_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << '\n'; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END
+			}
+			// TODO: Consider making other versions of the color variables that have newlines at the end so that you can avoid one of the << operators when using std::cout, I heard those were inefficient, check that claim out.
+			COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << '\n'; } lineCounter++; COLORED_LINE_WHILE_END()
+		}
 		if (flags::lineNums) { COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; } lineCounter++; COLORED_LINE_WHILE_END() }
 		COLORED_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; } COLORED_LINE_WHILE_END()
 	}
