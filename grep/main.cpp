@@ -95,7 +95,7 @@ const char* helpText = "grep accepts text as input and outputs the lines from th
 							"\t--only-line-nums             -->         print only the line numbers, not the actual lines\n" \
 							"\t--color <auto|on|off>        -->         force a specific coloring behaviour, auto is default\n";
 
-// Flag to keep track of whether we should color output or not. Can also be used for testing if output is a TTY or not.
+// Flag to keep track of whether we should color output or not.
 bool isOutputColored;
 
 // Output coloring.
@@ -112,6 +112,8 @@ namespace color {
 
 	void release() { delete[] color::red; delete[] color::reset; }
 }
+
+// TODO: Remove the whole format error thing and just write it in the string. No extra characters pretty much and you also reduce the number of function calls to the streaming operator of ostream.
 
 // Output formatting.
 namespace format {
@@ -292,7 +294,7 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 				if (!strcmp(flagTextStart, "help")) { showHelp(); exit(EXIT_SUCCESS); }
 				if (!strcmp(flagTextStart, "h")) { showHelp(); exit(EXIT_SUCCESS); }
 				color::initErrorColoring();
-				std::cout << color::red << format::error << "one or more flag arguments is invalid" << color::reset << '\n';
+				std::cout << color::red << format::error << "one or more flag arguments are invalid" << color::reset << '\n';
 				color::release();
 				exit(EXIT_SUCCESS);
 			}
@@ -331,7 +333,7 @@ void manageArgs(int argc, char** argv) {
 				exit(EXIT_SUCCESS);
 			}
 		}
-	}
+	}					// TODO: Clean up these unnamed namespaces. Think about it, is there a reason to have two here?
 		return;
 	default:																										// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
 		color::initErrorColoring();
@@ -562,8 +564,11 @@ int main(int argc, char** argv) {
 		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { return EXIT_FAILURE; }	// NOTE: If these calls fail, something about the OS is off and you should fix that before running the program again, but in normal operation, these should basically never fail. I don't see it as our duty to handle every possible, esoteric error.
 #endif
 
+		// TODO: If some part of the above isn't successful, just run the program as if it weren't connected to a tty, thats the best behaviour.
+
 		// NOTE: Technically, it would be more efficient to place the above virtual terminal processing code in a place where we know for sure whether or not we are going to be using colors. That would require writing it multiple times though and the code wouldn't look as nice.
 		// NOTE: Since this overhead is so incredibly small and only transpires one single time, there is essentially no cost, which is why I'm ok with not moving it. SIDE-NOTE: Yes, we could use a function for this, but that still produces less pretty code than the current situation.
+		// TODO: The above notes don't make sense I believe, read them again and then delete them if they're not good.
 
 		isOutputColored = true;
 		forcedOutputColoring = true;
