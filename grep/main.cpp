@@ -122,7 +122,7 @@ namespace format {
 
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
 bool shouldLoopRun = true;
-void signalHandler(int signum) { shouldLoopRun = false; }
+void signalHandler(int signum) { shouldLoopRun = false; }				// TODO: Apparently, SIGINT isn't even used by windows, it's just available to handle for some reason. There is this different function, setConsoleCtrlHandler or something, that you can use for this functionality, research it.
 #endif
 
 // Collection of flags. These correspond to command-line flags you can set for the program.
