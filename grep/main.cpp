@@ -1,5 +1,6 @@
+// TODO: Tune the stream buffers to the most common block sizes just like in writefile.
 // Memory usage.
-#define INPUT_STREAM_BUFFER_MAX_SIZE 1024 * 1024																		// The maximum size to resize the stream buffer to. This prevents endless amounts of RAM from being used.
+#define INPUT_STREAM_BUFFER_MAX_SIZE (1024 * 1024)																		// The maximum size to resize the stream buffer to. This prevents endless amounts of RAM from being used.
 #define INPUT_STREAM_BUFFER_START_SIZE 256																				// The starting size for the stream buffer.
 #define INPUT_STREAM_BUFFER_SIZE_STEP 256																				// How much more memory to reallocate with if the bounds of the previous memory were hit.
 
@@ -113,16 +114,11 @@ namespace color {
 	void release() { delete[] color::red; delete[] color::reset; }
 }
 
-// TODO: Remove the whole format error thing and just write it in the string. No extra characters pretty much and you also reduce the number of function calls to the streaming operator of ostream.
-
-// Output formatting.
-namespace format {
-	const char* const error = "ERROR: ";	// NOTE: const char* const instead of const char* doesn't always work. In the cases where you intend to change what the const char* pointer points to, const char* allows that while const char* const doesn't. In this case, const char* const is absolutely fine, but a lot of people still don't write it because personal preference and style.
-}
+// SIDE-NOTE: const char* const instead of const char* doesn't always work. In the cases where you intend to change what the const char* pointer points to, const char* allows that while const char* const doesn't. In this case, const char* const is absolutely fine, but a lot of people still don't write it because personal preference and style.
 
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
 bool shouldLoopRun = true;
-void signalHandler(int signum) { shouldLoopRun = false; }				// TODO: Apparently, SIGINT isn't even used by windows, it's just available to handle for some reason. There is this different function, setConsoleCtrlHandler or something, that you can use for this functionality, research it.
+void signalHandler(int signum) { shouldLoopRun = false; }							// NOTE: SIGINT exists on Windows, but SIGTERM doesn't. SIGTERM is replaced by SIGBREAK on Windows. Also, SIGINT signal handler gets run on a separate thread, unlike the signal handlers for all the other signals. Why? I have no idea.
 #endif
 
 // Collection of flags. These correspond to command-line flags you can set for the program.
@@ -206,6 +202,8 @@ unsigned int HistoryBuffer::beginIndex = 0;
 unsigned int HistoryBuffer::buffer_lastIndex;
 unsigned int HistoryBuffer::amountFilled = 0;
 
+// TODO: Add a note somewhere about how powershell messed up your testing and how you ended up fixing it after a while. It might become valuable to know that in the future in case it messes you up again.
+
 // Parse a single flag group. A flag group is made out of a bunch of single letter flags.
 void parseFlagGroup(char* arg) {
 	for (int i = 0; ; i++) {
@@ -217,8 +215,7 @@ void parseFlagGroup(char* arg) {
 		case '\0': return;
 		default:
 			color::initErrorColoring();
-			std::cout << color::red << format::error << "one or more flag arguments are invalid" << color::reset << '\n';				// TODO: If it weren't for that windows C++ runtime thing where it puts another newline at the end, I would integrate the \n directly into the string. Is that still possible somehow on windows? Do we have to move away from ANSI escape codes for colors.
-			// TODO: Actually, it doesn't seem to be the runtime, it's pesky powershell adding an extra newline to it when it writes it to files using redirection, Out-File or Set-Content, find a way to get around that.
+			std::cout << color::red << "ERROR: one or more flag arguments are invalid\n" << color::reset;
 			color::release();
 			exit(EXIT_SUCCESS);
 		}
@@ -244,7 +241,7 @@ unsigned int parseUInt(char* string) {
 		}
 	}
 	color::initErrorColoring();
-	std::cout << color::red << format::error << "invalid value for --context flag" << color::reset << '\n';
+	std::cout << color::red << "invalid value for --context flag\n" << color::reset;
 	color::release();
 	exit(EXIT_SUCCESS);
 }
@@ -265,7 +262,7 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 					i++;
 					if (i == argc) {
 						color::initErrorColoring();
-						std::cout << color::red << format::error << "the --context flag was not supplied with a value" << color::reset << '\n';
+						std::cout << color::red << "ERROR: the --context flag was not supplied with a value\n" << color::reset;
 						color::release();
 						exit(EXIT_SUCCESS);
 					}
@@ -279,7 +276,7 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 					i++;
 					if (i == argc) {
 						color::initErrorColoring();
-						std::cout << color::red << format::error << "the --color flag was not supplied with a value" << color::reset << '\n';
+						std::cout << color::red << "ERROR: the --color flag was not supplied with a value\n" << color::reset;
 						color::release();
 						exit(EXIT_SUCCESS);
 					}
@@ -287,14 +284,14 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 					if (!strcmp(argv[i], "off")) { forcedOutputColoring = false; continue; }
 					if (!strcmp(argv[i], "auto")) { forcedOutputColoring = isOutputColored; continue; }
 					color::initErrorColoring();
-					std::cout << color::red << format::error << "invalid value for --color flag" << color::reset << '\n';
+					std::cout << color::red << "ERROR: invalid value for --color flag\n" << color::reset;
 					color::release();
 					exit(EXIT_SUCCESS);
 				}
 				if (!strcmp(flagTextStart, "help")) { showHelp(); exit(EXIT_SUCCESS); }
 				if (!strcmp(flagTextStart, "h")) { showHelp(); exit(EXIT_SUCCESS); }
 				color::initErrorColoring();
-				std::cout << color::red << format::error << "one or more flag arguments are invalid" << color::reset << '\n';
+				std::cout << color::red << "ERROR: one or more flag arguments are invalid\n" << color::reset;
 				color::release();
 				exit(EXIT_SUCCESS);
 			}
@@ -314,36 +311,33 @@ void manageArgs(int argc, char** argv) {
 	switch (argc - keyphraseArgIndex) {
 	case 0:
 		color::initErrorColoring();
-		std::cout << color::red << format::error << "too few arguments" << color::reset << '\n';
+		std::cout << color::red << "ERROR: too few arguments\n" << color::reset;
 		color::release();
 		exit(EXIT_SUCCESS);
 	case 1:
-	{
-		bool previousOutputColoring = isOutputColored;
-		isOutputColored = forcedOutputColoring;																		// If everything went great with parsing the cmdline args, finally set output coloring to what the user wants it to be. It is necessary to do this here because of the garantee that we wrote above.
-		forcedOutputColoring = previousOutputColoring;
-		{																											// Unnamed namespace because we can't create variables inside switch cases otherwise.
+		{																												// Unnamed namespace because we can't create variables inside switch cases otherwise.
+			bool previousOutputColoring = isOutputColored;
+			isOutputColored = forcedOutputColoring;																		// If everything went great with parsing the cmdline args, finally set output coloring to what the user wants it to be. It is necessary to do this here because of the garantee that we wrote above.
+			forcedOutputColoring = previousOutputColoring;
+
 			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::nosubs | std::regex_constants::optimize;
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
 			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }								// Parse regex keyphrase.
 			catch (const std::regex_error& err) {																	// Catch any errors relating to keyphrase regex syntax and report them.
 				color::initErrorColoring();
-				std::cout << color::red << format::error << "regex error: " << err.what() << color::reset << '\n';
+				std::cout << color::red << "ERROR: regex error: " << err.what() << color::reset << '\n';
 				color::release();
 				exit(EXIT_SUCCESS);
 			}
 		}
-	}					// TODO: Clean up these unnamed namespaces. Think about it, is there a reason to have two here?
 		return;
 	default:																										// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
 		color::initErrorColoring();
-		std::cout << color::red << format::error << "too many arguments" << color::reset << '\n';
+		std::cout << color::red << "ERROR: too many arguments\n" << color::reset;
 		color::release();
 		exit(EXIT_SUCCESS);
 	}
 }
-
-// TODO: Go through all your usages of '\n' with std::cout and make sure you can't make any of them simpler by integrating the newline into the string or something.
 
 // Handles input in a buffered way.
 class InputStream {
@@ -390,7 +384,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		// When no more data left in buffer, try get more.
 		if (poll(fds, 2, -1) == -1) {																				// Block until we either get some input on stdin or get either a SIGINT or a SIGTERM.
 			if (!color::red) { color::initErrorColoring(); }
-			std::cout << color::red << format::error << "failed to poll stdin, SIGINT and SIGTERM" << color::reset << '\n';
+			std::cout << color::red << "ERROR: failed to poll stdin, SIGINT and SIGTERM\n" << color::reset;
 			return false;
 		}
 
@@ -401,7 +395,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		if (bytesReceived == 0) { return false; }																	// In case of actual EOF, signal EOF.
 		if (bytesReceived == -1) {																					// In case of error, log and signal EOF.
 			if (!color::red) { color::initErrorColoring(); }
-			std::cout << color::red << format::error << "failed to read from stdin" << color::reset << '\n';
+			std::cout << color::red << "ERROR: failed to read from stdin\n" << color::reset;
 			return false;
 
 		}
@@ -409,10 +403,12 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 		// TODO: The below comparison gives warnings on gcc. Makes sense, can we stop comparing two different types here?
 		if (bytesReceived == bufferSize) {																			// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
-			size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;
-			char* newBuffer = (char*)realloc(buffer, newBufferSize);
-			if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
-		}			// TODO: Actually use HISTORY_BUFFER_MAX_SIZE here. Also add parenthesese around the define because thats safer. This is super important, integral stuff that you've just forgotten, get it done.
+			size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;					// TODO: There is probably a way to avoid doing this addition when the buffer is at it's max. You need to do some macro magic with divisions and floors to find the exact value you need to stop at in compile-time.
+			if (newBufferSize <= INPUT_STREAM_BUFFER_MAX_SIZE) {
+				char* newBuffer = (char*)realloc(buffer, newBufferSize);
+				if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
+			}
+		}
 
 		return true;
 	}
@@ -425,7 +421,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		// NOTE: More importantly, that only works if you assume that the last line of the file ends with EOF, but it might end in newline, in which case this is the better way to do it because it doesn't print an extra line at the bottom of the output.
 		if (std::cin.eof()) { return false; }																		// If getline fails because we're trying to read at the EOF position (in which case eofbit will be set), return false without doing error reporting.
 		if (!color::red) { color::initErrorColoring(); }															// Otherwise, some error occurred and we need to report it and return false.
-		std::cout << color::red << format::error << "failed to read from stdin" << color::reset << '\n';
+		std::cout << color::red << "ERROR: failed to read from stdin\n" << color::reset;
 		return false;
 
 #else
@@ -448,7 +444,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			if (character == EOF) { return false; }																	// Even if the lines are long, all you'll have to do is press Ctrl+C and wait for the line to be over for grep to quit. This is all so unlikely, that I'm not going to waste a branch checking for it.
 			if (std::cin.fail()) {
 				if (!color::red) { color::initErrorColoring(); }
-				std::cout << color::red << format::error << "failed to read from stdin" << color::reset << '\n';
+				std::cout << color::red << "ERROR: failed to read from stdin\n" << color::reset;
 				return false;
 			}
 			if (character == '\n') { return true; }
@@ -566,9 +562,9 @@ int main(int argc, char** argv) {
 
 		// TODO: If some part of the above isn't successful, just run the program as if it weren't connected to a tty, thats the best behaviour.
 
-		// NOTE: Technically, it would be more efficient to place the above virtual terminal processing code in a place where we know for sure whether or not we are going to be using colors. That would require writing it multiple times though and the code wouldn't look as nice.
+		// NOTE: Technically, it would be more efficient to place the above virtual terminal processing code in places where we are sure that the possibility exists that we can use colors. Not all places satisfy this requirement and the above code thereby technically runs to early and is slightly inefficient in that regard.
+		// NOTE: That would require writing it multiple times though and the code wouldn't look as nice.
 		// NOTE: Since this overhead is so incredibly small and only transpires one single time, there is essentially no cost, which is why I'm ok with not moving it. SIDE-NOTE: Yes, we could use a function for this, but that still produces less pretty code than the current situation.
-		// TODO: The above notes don't make sense I believe, read them again and then delete them if they're not good.
 
 		isOutputColored = true;
 		forcedOutputColoring = true;
