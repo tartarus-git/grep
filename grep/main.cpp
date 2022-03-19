@@ -241,7 +241,7 @@ unsigned int parseUInt(char* string) {
 		}
 	}
 	color::initErrorColoring();
-	std::cout << color::red << "invalid value for --context flag\n" << color::reset;
+	std::cout << color::red << "ERROR: invalid value for --context flag\n" << color::reset;
 	color::release();
 	exit(EXIT_SUCCESS);
 }
