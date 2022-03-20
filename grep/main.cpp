@@ -202,7 +202,13 @@ unsigned int HistoryBuffer::beginIndex = 0;
 unsigned int HistoryBuffer::buffer_lastIndex;
 unsigned int HistoryBuffer::amountFilled = 0;
 
-// TODO: Add a note somewhere about how powershell messed up your testing and how you ended up fixing it after a while. It might become valuable to know that in the future in case it messes you up again.
+// NOTE: While writing the testing system for this program, I stumbled on a bunch of issues. The main problem was that powershell doesn't just pipe the data to and from programs. It will split it on the newlines and construct a list of strings that it will pass to and from programs.
+// I don't exactly know why, probably because Powershell deals with objects instead of raw data when it transfers data, so it tries to convert between the two.
+// This was one of the super cool things about powershell that was advertised, but it's kind of stupid in a lot of scenarios. Anyway, when piping the string array into another program, powershell concatinates the strings into one giant string that just has a lot of lines.
+// It would be cool if this string was the same as the original string that powershell accepted from this grep program, but it sadly isn't in some cases. The strings are all fitted with a line ending at the end. This is a huge issue when you're trying to write a line that doesn't end the line at the end.
+// For me, this became an issue when I tried to write an ANSI escape code for resetting the text color after the last newline. Powershell put another newline at the end, making there be an extra line at the end of the output file.
+// To solve this, I just wrote the testing system in C++ and did the piping myself. Powershell just wasn't cutting it. Anyway, it's important that you remember this behaviour that you experienced while doing this project.
+// Also, powershell behaves weird in other ways as well. The Out-File and the > and >> operators all write data in 16-bit wide format, which means half your file is just NUL characters. Really stupid but that's the way it goes. You can override this with the -Encoding ascii flag on Out-File, but the > and >> operators just aren't changeable.
 
 // Parse a single flag group. A flag group is made out of a bunch of single letter flags.
 void parseFlagGroup(char* arg) {
@@ -214,7 +220,7 @@ void parseFlagGroup(char* arg) {
 		case 'v': flags::inverted = true; break;
 		case '\0': return;
 		default:
-			color::initErrorColoring();
+			color::initErrorColoring();					// TODO: You should replace these three lines with a report error function that generates the const char*'s required (including ANSI codes) at compile-time and picks between the colored versions and the non-colored versions at runtime. That would be faster than the current situation if I'm not mistaken. It's definitely possible if you use const (&char)[N] strings and macro string literal creation.
 			std::cout << color::red << "ERROR: one or more flag arguments are invalid\n" << color::reset;
 			color::release();
 			exit(EXIT_SUCCESS);
@@ -464,6 +470,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 };
 
 // SUPER IMPORTANT TODO: Why are we not using the same buffering mechanism for windows as for Linux? Something to do with EOF's, but I don't think we understand all the stuff properly when we built this. The whole InputStream class could be improved. Do that.
+// FOLLOWUP: Yeah, I don't think we understood properly at the time of writing the current system. Yes, we don't really have a way to let SIGINT and such interrupt our read calls, but we don't have to rely on std::cin buffering system, which might not be optimal since it doesn't expand as much as ours.
+// There is no reason why we should use the same buffering system that we have for linux for the windows version.
 
 #ifndef PLATFORM_WINDOWS																							// Static members variables only need to be initialized in Linux because we don't have any in Windows.
 pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };												// Parts of this data get changed later in runtime.
@@ -498,7 +506,6 @@ void highlightMatches() {																							// I assume this will be inlined
 #else
 #define MAIN_WHILE InputStream::init(); while (true)
 #endif
-
 
 #define LINE_WHILE_START MAIN_WHILE { if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { break; }
 #ifdef PLATFORM_WINDOWS
