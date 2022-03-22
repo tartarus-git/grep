@@ -559,9 +559,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 #endif
 	}
 
-#ifndef PLATFORM_WINDOWS
 	static void release() { delete[] buffer; }
-#endif
 };
 
 // SUPER IMPORTANT TODO: Why are we not using the same buffering mechanism for windows as for Linux? Something to do with EOF's, but I don't think we understand all the stuff properly when we built this. The whole InputStream class could be improved. Do that.
@@ -603,7 +601,7 @@ void highlightMatches() {																							// I assume this will be inlined
 #endif
 
 #define LINE_WHILE_START MAIN_WHILE { if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { break; }
-#ifdef PLATFORM_WINDOWS
+#ifdef REMOVE_THIS_CODE_AFTER_MOVING_COMMENT_SOMEWHERE_ELSE
 #define LINE_WHILE_END(cleanupCode) } cleanupCode; HistoryBuffer::release(); return 0;								// NOTE: As per the standard, you can use function-style macros while leaving one or more or all of the parameters blank. They just won't be filled with anything and you'll have empty spots, which is exactly the behaviour we want here, so everythings fine.
 #else
 #define LINE_WHILE_END(cleanupCode) CURRENT_LINE_ALIAS.clear(); } cleanupCode; InputStream::release(); HistoryBuffer::release(); return 0;
