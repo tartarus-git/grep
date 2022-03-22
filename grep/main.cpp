@@ -448,7 +448,7 @@ public:
 #endif
 
 	static char* buffer;
-	static size_t bufferSize;
+	static size_t bufferSize;					// TODO: There is no real reason why this should be size_t instead of ssize_t is there? Check linux version as well. If ssize_t is used for indexes and reading, the buffer can't ever grow past that anyway, so why not use ssize_t here as well.
 
 	static ssize_t bytesRead;																						// Position of read head in buffer.
 	static ssize_t bytesReceived;																					// Position of write head in buffer.
