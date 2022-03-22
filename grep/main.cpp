@@ -195,6 +195,7 @@ void reportRegexError(const char* msg) {				// TODO: Finish writing this functio
 	std::memcpy(buffer + static_strlen("ERROR: regex error: "), msg, msgLength);
 	buffer[static_strlen("ERROR: regex error: ") + msgLength] = '\n';
 	crossplatform_write(STDERR_FILENO, buffer, bufferSize);
+	delete[] buffer;
 }
 
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
