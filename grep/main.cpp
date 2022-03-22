@@ -269,7 +269,7 @@ public:
 	static void lastPrintLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << '\n'; } }
 	static void printLineNums() { lastPrintLineNums(); purgeAmountFilled(); }
 
-	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }				// TODO: This does a deep copy, why are we doing that? Shouldn't we just return a pointer or a reference?
+	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }				// TODO: This is a deep copy, that is stupid. You should return a pointer or a reference.
 
 	static bool peekSafestLineNum(size_t& safestNum) { if (amountFilled == buffer_lastIndex) { safestNum = lineCounter - buffer_lastIndex; return true; } return false; }
 
@@ -431,15 +431,6 @@ void manageArgs(int argc, char** argv) {
 	}
 }
 
-class StringBuilder {							// TODO: This is essentially a replacement for the std::string class for this program. Before you keep working on this, you should probably get the other code ready to accept the new class.
-public:
-	char* buffer;
-
-	StringBuilder() { buffer = new char[STRING_BUILDER_BUFFER_START_SIZE]; }
-
-	~StringBuilder() { delete[] buffer; }
-};
-
 #ifdef PLATFORM_WINDOWS
 typedef int ssize_t;					// TODO: Make sure this syntax is correct.
 #endif
@@ -523,7 +514,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		return true;
 	}
 
-	static bool readLine(StringBuilder& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
+	static bool readLine(std::string& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
 #ifdef REMOVE_THE_FOLLOWING_CODE
 		if (std::getline(std::cin, line)) { return true; }															// Get line. Technically, eofbit gets set if EOF terminates the line, but we don't worry about that because in that case we have to return true as well.
 		// NOTE: Technically, one could put the below line above std::getline, but that would do an unnecessary branch for every readLine in the file. This way, the branch is only tested when it has to be, which induces small overhead at EOF but saves a bunch of overhead in the loops.
@@ -536,16 +527,9 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 #else
 		while (true) {
-			for (; bytesRead < bytesReceived; bytesRead += 8) {														// Read all the data in the buffer.
-				if (buffer[bytesRead + 0] == '\n') { return true; }
-				if (buffer[bytesRead + 1] == '\n') { line += buffer[bytesRead]; return true; }										// Stop when we encounter the end of the current line.
-				if (buffer[bytesRead + 2] == '\n') { line += *(uint16_t*)(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 3] == '\n') { line.write3(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 4] == '\n') { line += *(uint32_t*)(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 5] == '\n') { line.write5(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 6] == '\n') { line.write6(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 7] == '\n') { line.write7(buffer + bytesRead); return true; }
-				line += *(uint64_t*)(buffer + bytesRead); return true;
+			for (; bytesRead < bytesReceived; bytesRead += 1) {														// Read all the data in the buffer.
+				if (buffer[bytesRead] == '\n') { bytesRead += 1; return true; }										// Stop when we encounter the end of the current line.
+				line += buffer[bytesRead];
 			}
 			if (refillBuffer()) { continue; }																		// If we never encounter the end of the line in the current buffer, fetch more data.
 			return false;																							// If something went wrong while refilling buffer, return false.
