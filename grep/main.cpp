@@ -48,6 +48,7 @@
 #ifdef PLATFORM_WINDOWS																									// These #defines are already defined in one of the Linux-only headers, but for Windows, we need to explicitly do it.
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
+#define STDERR_FILENO 2
 #endif
 
 /*
@@ -86,27 +87,31 @@ Beneifts of SWAR over SIMD: The benefits come only from the fact that, through s
 
 */
 
+#define static_strlen(x) (sizeof(x) - 1)
+
 // ANSI escape code helpers.
 #define ANSI_ESC_CODE_PREFIX "\033["
 #define ANSI_ESC_CODE_SUFFIX "m"
-#define ANSI_ESC_CODE_MIN_SIZE ((sizeof(ANSI_ESC_CODE_PREFIX) - 1) + (sizeof(ANSI_ESC_CODE_SUFFIX) - 1))
+#define ANSI_ESC_CODE_MIN_SIZE (static_strlen(ANSI_ESC_CODE_PREFIX) + static_strlen(ANSI_ESC_CODE_SUFFIX))
 
 const char* helpText = "grep accepts text as input and outputs the lines from the input that have the specified keyphrase in them\n" \
 					   "\n" \
-					   "usage: grep [-calv] [--context <amount> || --only-line-nums || --color <auto|on|off>] <regex keyphrase>\n" \
+					   "usage: grep [-calv] [--context <amount> || --only-line-nums || --stdout-color <auto|on|off> || --stderr-color <auto|on|off>] <regex keyphrase>\n" \
 					   "       grep <--help || --h>            -->            shows help text\n" \
 					   "\n" \
 					   "arguments:\n" \
-							"\t-c                           -->         be case sensitive when matching\n" \
-							"\t-a                           -->         print all lines from input but still color matches\n" \
-							"\t-l                           -->         print line numbers\n" \
-							"\t-v                           -->         invert output - print lines that would normally be omitted and omit lines that would normally be printed\n" \
-							"\t--context <amount>           -->         print the specified amount of context (in lines) around each matched line\n" \
-							"\t--only-line-nums             -->         print only the line numbers, not the actual lines\n" \
-							"\t--color <auto|on|off>        -->         force a specific coloring behaviour, auto is default\n";
+							"\t-c							   -->         be case sensitive when matching\n" \
+							"\t-a                              -->         print all lines from input but still color matches\n" \
+							"\t-l                              -->         print line numbers\n" \
+							"\t-v                              -->         invert output - print lines that would normally be omitted and omit lines that would normally be printed\n" \
+							"\t--context <amount>              -->         print the specified amount of context (in lines) around each matched line\n" \
+							"\t--only-line-nums                -->         print only the line numbers, not the actual lines\n" \
+							"\t--stdout-color <auto|on|off>    -->         force a specific stdout coloring behaviour, auto is default\n" \
+							"\t--stderr-color <auto|on|off>    -->         force a specific stderr coloring behaviour, auto is default\n";
 
 // Flag to keep track of whether we should color output or not.
 bool isOutputColored;
+bool isErrorColored;
 
 // Output coloring.
 namespace color {
@@ -119,71 +124,75 @@ namespace color {
 // This function makes it easy to report errors. It handles the coloring for you, as well as the formatting of the error string.
 template <size_t N>
 void reportError(const char (&msg)[N]) {
-	if (isOutputColored) {
+	if (isErrorColored) {
 		// Construct a buffer to hold the finished error message.
-		char buffer[sizeof(color::red) - 1 + sizeof("ERROR: ") - 1 + N - 1 + sizeof(color::reset) - 1 + 1];							// NOTE: This code block is to create our own specific buffering for these substrings, to avoid syscalls and make the whole thing as efficient as possible.
+		char buffer[static_strlen(color::red) + static_strlen("ERROR: ") + N - 1 + static_strlen(color::reset) + 1];							// NOTE: This code block is to create our own specific buffering for these substrings, to avoid syscalls and make the whole thing as efficient as possible.
 
 		// Copy in the ANSI code for red color.
-		std::memcpy(buffer, color::red, sizeof(color::red) - 1);																		// NOTE: Technically, it would be more efficient to write "ERROR: " in every error message individually, but that probably means the executable is larger because of the extra .rodata data, which is undesirable.
+		std::memcpy(buffer, color::red, static_strlen(color::red));																		// NOTE: Technically, it would be more efficient to write "ERROR: " in every error message individually, but that probably means the executable is larger because of the extra .rodata data, which is undesirable.
 
 		// Copy in the ERROR tag.
-		std::memcpy(buffer + sizeof(color::red) - 1, "ERROR: ", sizeof("ERROR: ") - 1);									// NOTE: memcpy is the C-style version of the function and std::memcpy is the C++-style version of the function. They're both literally the same function in every single way, but I'm going to use std because it's more "proper".
+		std::memcpy(buffer + static_strlen(color::red), "ERROR: ", static_strlen("ERROR: "));									// NOTE: memcpy is the C-style version of the function and std::memcpy is the C++-style version of the function. They're both literally the same function in every single way, but I'm going to use std because it's more "proper".
 
 		// Copy in the actual error message.
-		std::memcpy(buffer + sizeof(color::red) - 1 + sizeof("ERROR: ") - 1, msg, N - 1);
+		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: "), msg, N - 1);
 
 		// Copy in the ANSI code for color reset.
-		std::memcpy(buffer + sizeof(color::red) - 1 + sizeof("ERROR: ") - 1 + N - 1, color::reset, sizeof(color::reset) - 1);
+		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: ") + N - 1, color::reset, static_strlen(color::reset));
 
 		// Add a newline to the end of the message.
-		buffer[sizeof(color::red) - 1 + sizeof("ERROR: ") - 1 + N - 1 + sizeof(color::reset) - 1] = '\n';
+		buffer[static_strlen(color::red) + static_strlen("ERROR: ") + N - 1 + static_strlen(color::reset)] = '\n';
 
 		// Write the message to stdout.
-		crossplatform_write(STDOUT_FILENO, buffer, sizeof(buffer));									// Don't buffer the output, we would technically have to if other buffered output would have happened till this point, but errors almost always happen before any buffered output, so this is safe.
+		crossplatform_write(STDERR_FILENO, buffer, sizeof(buffer));									// Don't buffer the output, we would technically have to if other buffered output would have happened till this point, but errors almost always happen before any buffered output, so this is safe.
 		// TODO: Write about how we don't have to catch any errors here.
 		return;
 	}
 	// Uncolored version of the error message generation.
-	char buffer[sizeof("ERROR: ") - 1 + N - 1 + 1];
-	std::memcpy(buffer, "ERROR: ", sizeof("ERROR: ") - 1);
-	std::memcpy(buffer + sizeof("ERROR: ") - 1, msg, N - 1);
-	buffer[sizeof("ERROR: ") - 1 + N - 1] = '\n';
-	crossplatform_write(STDOUT_FILENO, buffer, sizeof(buffer));					// TODO: Why does intellisense want something from me here?
+	char buffer[static_strlen("ERROR: ") + N - 1 + 1];
+	std::memcpy(buffer, "ERROR: ", static_strlen("ERROR: "));
+	std::memcpy(buffer + static_strlen("ERROR: "), msg, N - 1);
+	buffer[static_strlen("ERROR: ") + N - 1] = '\n';
+	crossplatform_write(STDERR_FILENO, buffer, sizeof(buffer));					// TODO: Why does intellisense want something from me here?
 }
 
 void reportRegexError(const char* msg) {				// TODO: Finish writing this function for regex error reporting.
 	size_t msgLength = std::strlen(msg);
 
-	if (isOutputColored) {
+	if (isErrorColored) {
 		// Construct a buffer to hold the finished error message.
-		char buffer[sizeof(color::red) - 1 + sizeof("ERROR: regex error: ") - 1 + msgLength + sizeof(color::reset) - 1 + 1];							// NOTE: This code block is to create our own specific buffering for these substrings, to avoid syscalls and make the whole thing as efficient as possible.
+		size_t bufferSize = static_strlen(color::red) + static_strlen("ERROR: regex error: ") + msgLength + static_strlen(color::reset) + 1;							// NOTE: This code block is to create our own specific buffering for these substrings, to avoid syscalls and make the whole thing as efficient as possible.
+		char* buffer = new char[bufferSize];
 
 		// Copy in the ANSI code for red color.
-		std::memcpy(buffer, color::red, sizeof(color::red) - 1);																		// NOTE: Technically, it would be more efficient to write "ERROR: " in every error message individually, but that probably means the executable is larger because of the extra .rodata data, which is undesirable.
+		std::memcpy(buffer, color::red, static_strlen(color::red));																		// NOTE: Technically, it would be more efficient to write "ERROR: " in every error message individually, but that probably means the executable is larger because of the extra .rodata data, which is undesirable.
 
 		// Copy in the ERROR tag.
-		std::memcpy(buffer + sizeof(color::red) - 1, "ERROR: ", sizeof("ERROR: ") - 1);									// NOTE: memcpy definition exists because Visual Studio puts in an extra header file that lets it be available implicitly. AFAIK, if you want cross-platform and cross-compiler support, you have to use std::memcpy.
+		std::memcpy(buffer + static_strlen(color::red), "ERROR: regex error: ", static_strlen("ERROR: regex error: "));									// NOTE: memcpy definition exists because Visual Studio puts in an extra header file that lets it be available implicitly. AFAIK, if you want cross-platform and cross-compiler support, you have to use std::memcpy.
 
 		// Copy in the actual error message.
-		std::memcpy(buffer + sizeof(color::red) - 1 + sizeof("ERROR: ") - 1, msg, N - 1);
+		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: regex error: "), msg, msgLength);
 
 		// Copy in the ANSI code for color reset.
-		std::memcpy(buffer + sizeof(color::red) - 1 + sizeof("ERROR: ") - 1 + N - 1, color::reset, sizeof(color::reset) - 1);
+		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: regex error: ") + msgLength, color::reset, static_strlen(color::reset));
 
 		// Add a newline to the end of the message.
-		buffer[sizeof(color::red) - 1 + sizeof("ERROR: ") - 1 + N - 1 + sizeof(color::reset) - 1] = '\n';
+		buffer[static_strlen(color::red) + static_strlen("ERROR: regex error: ") + msgLength + static_strlen(color::reset)] = '\n';
 
 		// Write the message to stdout.
-		crossplatform_write(STDOUT_FILENO, buffer, sizeof(buffer));									// Don't buffer the output, we would technically have to if other buffered output would have happened till this point, but errors almost always happen before any buffered output, so this is safe.
+		crossplatform_write(STDERR_FILENO, buffer, bufferSize);									// Don't buffer the output, we would technically have to if other buffered output would have happened till this point, but errors almost always happen before any buffered output, so this is safe.
 		// TODO: Write about how we don't have to catch any errors here.
+
+		delete[] buffer;
 		return;
 	}
 	// Uncolored version of the error message generation.
-	char buffer[sizeof("ERROR: ") - 1 + N - 1 + 1];
-	std::memcpy(buffer, "ERROR: ", sizeof("ERROR: ") - 1);
-	std::memcpy(buffer + sizeof("ERROR: ") - 1, msg, N - 1);
-	buffer[sizeof("ERROR: ") - 1 + N - 1] = '\n';
-	crossplatform_write(STDOUT_FILENO, buffer, sizeof(buffer));					// TODO: Why does intellisense want something from me here?
+	size_t bufferSize = static_strlen("ERROR: regex error: ") + msgLength + 1;
+	char* buffer = new char[bufferSize];
+	std::memcpy(buffer, "ERROR: regex error: ", static_strlen("ERROR: regex error: "));				// TODO: What's wrong here?
+	std::memcpy(buffer + static_strlen("ERROR: regex error: "), msg, msgLength);
+	buffer[static_strlen("ERROR: regex error: ") + msgLength] = '\n';
+	crossplatform_write(STDERR_FILENO, buffer, bufferSize);
 }
 
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
@@ -320,10 +329,11 @@ unsigned int parseUInt(char* string) {
 
 void showHelp() { std::cout << helpText; }				// NOTE: I have previously only shown help when output is connected to TTY, so as not to pollute stdout when piping. Back then, help was shown sometimes when it wasn't requested, which made it prudent to include that feature. Now, you have to explicitly ask for help, making this TTY branching unnecessary.
 
-bool forcedOutputColoring;					// NOTE: GARANTEE: If something goes wrong while parsing the cmdline args and an error message is necessary, the error message will always be printed with the default coloring (based on TTY/piped mode).
+bool forcedOutputColoring;
+bool forcedErrorColoring;// NOTE: GARANTEE: If something goes wrong while parsing the cmdline args and an error message is necessary, the error message will always be printed with the default error coloring (based on TTY/piped mode).
 
 // Parse flags at the argument level. Calls parseFlagGroup if it encounters flag groups and handles word flags (those with -- in front) separately.
-unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you write --context twice or --color twice (or any additional flags that we may add), the value supplied to the rightmost instance will be the value that is used. Does not throw an error.
+unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you write --context twice or --stdout-color or --stderr-color twice (or any additional flags that we may add), the value supplied to the rightmost instance will be the value that is used. Does not throw an error.
 	for (int i = 1; i < argc; i++) {
 		const char* arg = argv[i];
 		if (arg[0] == '-') {
@@ -345,16 +355,29 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 
 				if (!strcmp(flagTextStart, "only-line-nums")) { flags::only_line_nums = true; continue; }
 
-				if (!strcmp(flagTextStart, "color")) {
+				if (!strcmp(flagTextStart, "stdout-color")) {
 					i++;
 					if (i == argc) {
-						reportError("the --color flag was not supplied with a value");
+						reportError("the --stdout-color flag was not supplied with a value");
 						exit(EXIT_SUCCESS);
 					}
 					if (!strcmp(argv[i], "on")) { forcedOutputColoring = true; continue; }
 					if (!strcmp(argv[i], "off")) { forcedOutputColoring = false; continue; }
 					if (!strcmp(argv[i], "auto")) { forcedOutputColoring = isOutputColored; continue; }
-					reportError("invalid value for --color flag");
+					reportError("invalid value for --stdout-color flag");
+					exit(EXIT_SUCCESS);
+				}
+
+				if (!strcmp(flagTextStart, "stderr-color")) {
+					i++;
+					if (i == argc) {
+						reportError("the --stderr-color flag was not supplied with a value");
+						exit(EXIT_SUCCESS);
+					}
+					if (!strcmp(argv[i], "on")) { forcedErrorColoring = true; continue; }
+					if (!strcmp(argv[i], "off")) { forcedErrorColoring = false; continue; }
+					if (!strcmp(argv[i], "auto")) { forcedErrorColoring = isErrorColored; continue; }
+					reportError("invalid value for --stderr-color flag");
 					exit(EXIT_SUCCESS);
 				}
 
@@ -387,14 +410,17 @@ void manageArgs(int argc, char** argv) {
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
 			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }								// Parse regex keyphrase.
 			catch (const std::regex_error& err) {																	// Catch any errors relating to keyphrase regex syntax and report them.
-				if (isOutputColored) { std::cout << color::red << "ERROR: regex error: " << err.what() << color::reset << '\n'; }					// It's annoying to do this without a buffered output, so we just use std::cout for error reporting in the case of a regex error.
-				else { std::cout << "ERROR: regex error: " << err.what() << '\n'; }
+				reportRegexError(err.what());
 				exit(EXIT_SUCCESS);
 			}
 
-			bool previousOutputColoring = isOutputColored;
+			bool previousColoring = isOutputColored;
 			isOutputColored = forcedOutputColoring;																		// If everything went great with parsing the cmdline args, finally set output coloring to what the user wants it to be. It is necessary to do this here because of the garantee that we wrote above.
-			forcedOutputColoring = previousOutputColoring;
+			forcedOutputColoring = previousColoring;
+
+			previousColoring = isErrorColored;
+			isErrorColored = forcedErrorColoring;
+			forcedErrorColoring = previousColoring;				// TODO: This code block isn't strictly necessary, so you should probably remove it.
 		}
 		return;
 	default:																										// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
@@ -484,8 +510,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		// NOTE: Technically, one could put the below line above std::getline, but that would do an unnecessary branch for every readLine in the file. This way, the branch is only tested when it has to be, which induces small overhead at EOF but saves a bunch of overhead in the loops.
 		// NOTE: More importantly, that only works if you assume that the last line of the file ends with EOF, but it might end in newline, in which case this is the better way to do it because it doesn't print an extra line at the bottom of the output.
 		if (std::cin.eof()) { return false; }																		// If getline fails because we're trying to read at the EOF position (in which case eofbit will be set), return false without doing error reporting.
-		if (isOutputColored) { std::cout << color::red << "ERROR: failed to read from stdin\n" << color::reset; }															// Otherwise, some error occurred and we need to report it and return false.
-		else { std::cout << "ERROR: failed to read from stdin\n"; }
+			// Otherwise, some error occurred and we need to report it and return false.
+		reportError("failed to read from stdin");
 		
 		return false;
 
@@ -508,8 +534,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			character = std::cin.get();																				// Processing characters once they've been submitted by user is super fast, so the check would be pretty much unnecessary unless the lines are super super super long, which doesn't happen often.
 			if (character == EOF) { return false; }																	// Even if the lines are long, all you'll have to do is press Ctrl+C and wait for the line to be over for grep to quit. This is all so unlikely, that I'm not going to waste a branch checking for it.
 			if (std::cin.fail()) {
-				if (isOutputColored) { std::cout << color::red << "ERROR: failed to read from stdin\n" << color::reset; }
-				else { std::cout << "ERROR: failed to read form stdin\n" << color::reset; }
+				reportError("failed to read from stdin");
 				return false;
 			}
 			if (character == '\n') { return true; }
@@ -635,6 +660,28 @@ int main(int argc, char** argv) {
 	ANSISetupFailure:
 		isOutputColored = false;
 		forcedOutputColoring = false;
+	}
+
+	if (isatty(STDERR_FILENO)) {
+#ifdef PLATFORM_WINDOWS						// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
+		HANDLE consoleOutputHandle = GetStdHandle(STD_ERROR_HANDLE);
+		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { goto ANSIErrorSetupFailure; }						// If ANSI setup fails, just revert back to not coloring the output, so the user can at least see the output, even if it won't be colored.
+		DWORD mode;																												// NOTE: Because of the way this code plays with the rest of the code, the rest of the program will think that the output is being piped to something instead of being attached to a console, but that doesn't matter in this case.
+		if (!GetConsoleMode(consoleOutputHandle, &mode)) { goto ANSIErrorSetupFailure; }
+		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { goto ANSIErrorSetupFailure; }
+#endif
+
+		// NOTE: Technically, it would be more efficient to place the above virtual terminal processing code in places where we are sure that the possibility exists that we can use colors. Not all places satisfy this requirement and the above code thereby technically runs to early and is slightly inefficient in that regard.
+		// NOTE: That would require writing it multiple times though and the code wouldn't look as nice.
+		// NOTE: Since this overhead is so incredibly small and only transpires one single time, there is essentially no cost, which is why I'm ok with not moving it. SIDE-NOTE: Yes, we could use a function for this, but that still produces less pretty code than the current situation.
+
+		isErrorColored = true;
+		forcedErrorColoring = true;
+	}
+	else {
+	ANSIErrorSetupFailure:
+		isErrorColored = false;
+		forcedErrorColoring = false;
 	}
 
 	// NOTE: The reason we set the forcedOutputColoring as well as the isOutputColored flag above is because we set isOutputColored to forcedOutputColoring later in the code and we don't want that operation to mess up our coloring code.
