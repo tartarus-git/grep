@@ -30,9 +30,11 @@
 #ifdef PLATFORM_WINDOWS
 #include <io.h>																											// Needed for _isatty function.
 #define isatty(x) _isatty(x)																							// Renaming _isatty to isatty so it's the same as the function call in Linux.
+#define crossplatform_read(...) _read(__VA_ARGS__)
 #define crossplatform_write(...) _write(__VA_ARGS__)
 #else
 #include <unistd.h>																										// Linux isatty function is in here as well as some other useful stuff for this program as well I think.
+#define crossplatform_read(...) read(__VA_ARGS__)
 #define crossplatform_write(...) write(__VA_ARGS__)
 #endif
 
@@ -267,7 +269,7 @@ public:
 	static void lastPrintLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << '\n'; } }
 	static void printLineNums() { lastPrintLineNums(); purgeAmountFilled(); }
 
-	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }
+	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }				// TODO: This does a deep copy, why are we doing that? Shouldn't we just return a pointer or a reference?
 
 	static bool peekSafestLineNum(size_t& safestNum) { if (amountFilled == buffer_lastIndex) { safestNum = lineCounter - buffer_lastIndex; return true; } return false; }
 
@@ -429,14 +431,30 @@ void manageArgs(int argc, char** argv) {
 	}
 }
 
+class StringBuilder {							// TODO: This is essentially a replacement for the std::string class for this program. Before you keep working on this, you should probably get the other code ready to accept the new class.
+public:
+	char* buffer;
+
+	StringBuilder() { buffer = new char[STRING_BUILDER_BUFFER_START_SIZE]; }
+
+	~StringBuilder() { delete[] buffer; }
+};
+
+#ifdef PLATFORM_WINDOWS
+typedef int ssize_t;					// TODO: Make sure this syntax is correct.
+#endif
+
 // Handles input in a buffered way.
 class InputStream {
-#ifdef PLATFORM_WINDOWS
+/*#ifdef PLATFORM_WINDOWS
 public:
-	static void init() { std::cin.sync_with_stdio(false); }															// Unsynchronize C++ input buffer with C input buffer. This often makes things faster because implementors often don't bother buffering input until this is set to false (where they can then safely buffer input).
-#else
+	static void init() { }															// Unsynchronize C++ input buffer with C input buffer. This often makes things faster because implementors often don't bother buffering input until this is set to false (where they can then safely buffer input).
+#else*/
+
+#ifndef PLATFORM_WINDOWS
 	static pollfd fds[2];																							// File descriptors to poll. One for stdin and one for a signal fd.
 	static sigset_t sigmask;																						// Signals to handle with poll.
+#endif
 
 	static char* buffer;
 	static size_t bufferSize;
@@ -448,6 +466,7 @@ public:
 	static void init() {
 		buffer = new char[bufferSize];																				// Initialize buffer with the starting amount of RAM space.
 		
+#ifndef PLATFORM_WINDOWS
 		// Add SIGINT and SIGTERM to set of tracked signals.
 		if (sigemptyset(&sigmask) == -1) { goto errorBranch; }
 		if (sigaddset(&sigmask, SIGINT) == -1) { goto errorBranch; }
@@ -464,6 +483,7 @@ public:
 		}
 
 errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now unused entry in fds because some error prevented us from setting it up correctly.
+#endif
 	}
 
 	// NOTE: I think we probably could have just used the standard input buffering mechanisms (while retaining the ability to adjust buffer size) instead of building our own.
@@ -471,21 +491,21 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 	// NOTE: Plus, I haven't done any benchmarks. Maybe this is faster than the standard because the standard might do a bunch of safety checks and unnecessary stuff.
 
 	static bool refillBuffer() {
+#ifndef PLATFORM_WINDOWS
 		// When no more data left in buffer, try get more.
 		if (poll(fds, 2, -1) == -1) {																				// Block until we either get some input on stdin or get either a SIGINT or a SIGTERM.
-			if (!color::red) { color::initErrorColoring(); }
-			std::cout << color::red << "ERROR: failed to poll stdin, SIGINT and SIGTERM\n" << color::reset;
+			reportError("failed to poll stdin, SIGINT and SIGTERM");
 			return false;
 		}
 
 		if (fds[1].revents) { return false; }																		// Signal EOF if we caught a signal.
+#endif
 
-		bytesReceived = read(STDIN_FILENO, buffer, bufferSize);														// Read as much as we can fit into the buffer.
+		bytesReceived = crossplatform_read(STDIN_FILENO, buffer, bufferSize);														// Read as much as we can fit into the buffer.
 
 		if (bytesReceived == 0) { return false; }																	// In case of actual EOF, signal EOF.
 		if (bytesReceived == -1) {																					// In case of error, log and signal EOF.
-			if (!color::red) { color::initErrorColoring(); }
-			std::cout << color::red << "ERROR: failed to read from stdin\n" << color::reset;
+			reportError("failed to read from stdin");
 			return false;
 
 		}
@@ -502,10 +522,9 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 		return true;
 	}
-#endif
 
-	static bool readLine(std::string& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
-#ifdef PLATFORM_WINDOWS
+	static bool readLine(StringBuilder& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
+#ifdef REMOVE_THE_FOLLOWING_CODE
 		if (std::getline(std::cin, line)) { return true; }															// Get line. Technically, eofbit gets set if EOF terminates the line, but we don't worry about that because in that case we have to return true as well.
 		// NOTE: Technically, one could put the below line above std::getline, but that would do an unnecessary branch for every readLine in the file. This way, the branch is only tested when it has to be, which induces small overhead at EOF but saves a bunch of overhead in the loops.
 		// NOTE: More importantly, that only works if you assume that the last line of the file ends with EOF, but it might end in newline, in which case this is the better way to do it because it doesn't print an extra line at the bottom of the output.
@@ -517,9 +536,16 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 #else
 		while (true) {
-			for (; bytesRead < bytesReceived; bytesRead++) {														// Read all the data in the buffer.
-				if (buffer[bytesRead] == '\n') { bytesRead += 1; return true; }										// Stop when we encounter the end of the current line.
-				line += buffer[bytesRead];
+			for (; bytesRead < bytesReceived; bytesRead += 8) {														// Read all the data in the buffer.
+				if (buffer[bytesRead + 0] == '\n') { return true; }
+				if (buffer[bytesRead + 1] == '\n') { line += buffer[bytesRead]; return true; }										// Stop when we encounter the end of the current line.
+				if (buffer[bytesRead + 2] == '\n') { line += *(uint16_t*)(buffer + bytesRead); return true; }
+				if (buffer[bytesRead + 3] == '\n') { line.write3(buffer + bytesRead); return true; }
+				if (buffer[bytesRead + 4] == '\n') { line += *(uint32_t*)(buffer + bytesRead); return true; }
+				if (buffer[bytesRead + 5] == '\n') { line.write5(buffer + bytesRead); return true; }
+				if (buffer[bytesRead + 6] == '\n') { line.write6(buffer + bytesRead); return true; }
+				if (buffer[bytesRead + 7] == '\n') { line.write7(buffer + bytesRead); return true; }
+				line += *(uint64_t*)(buffer + bytesRead); return true;
 			}
 			if (refillBuffer()) { continue; }																		// If we never encounter the end of the line in the current buffer, fetch more data.
 			return false;																							// If something went wrong while refilling buffer, return false.
@@ -528,7 +554,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 	}
 
 	static bool discardLine() {																						// Reads the next line but doesn't store it anywhere since we're only reading it to advance the read position. Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF, SIGINT, SIGTERM or error on Linux.
-#ifdef PLATFORM_WINDOWS
+#ifdef REMOVE_THE_FOLLOWING_CODE
 		char character;
 		while (true) {																								// Not going to check for shouldLoopRun here because interrupting inside of a line isn't something that readLine offers either and because console is line-buffered anyway, so it wouldn't actually enable signalling while input is pending.
 			character = std::cin.get();																				// Processing characters once they've been submitted by user is super fast, so the check would be pretty much unnecessary unless the lines are super super super long, which doesn't happen often.
@@ -560,13 +586,13 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 #ifndef PLATFORM_WINDOWS																							// Static members variables only need to be initialized in Linux because we don't have any in Windows.
 pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };												// Parts of this data get changed later in runtime.
 sigset_t InputStream::sigmask;
+#endif
 
 char* InputStream::buffer;
 size_t InputStream::bufferSize = INPUT_STREAM_BUFFER_START_SIZE;
 
 ssize_t InputStream::bytesRead = 0;
 ssize_t InputStream::bytesReceived = 0;
-#endif
 
 std::smatch matchData;
 
