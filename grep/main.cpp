@@ -270,7 +270,7 @@ public:
 	static void lastPrintLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << '\n'; } }
 	static void printLineNums() { lastPrintLineNums(); purgeAmountFilled(); }
 
-	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }				// TODO: This is a deep copy, that is stupid. You should return a pointer or a reference.
+	static bool peekSafestLine(std::string*& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer + beginIndex * sizeof(std::string); return true; } return false; }
 
 	static bool peekSafestLineNum(size_t& safestNum) { if (amountFilled == buffer_lastIndex) { safestNum = lineCounter - buffer_lastIndex; return true; } return false; }
 
@@ -785,9 +785,9 @@ int main(int argc, char** argv) {
 							}
 							LINE_WHILE_CONTINUE;
 						}
-						std::string safestLine;
+						std::string* safestLine;
 						if (HistoryBuffer::peekSafestLine(safestLine)) {
-							size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << '\n'; }
+							size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << *safestLine << '\n'; }
 						}
 						HistoryBuffer::pushWithAmountInc();
 						lineCounter++;
@@ -832,7 +832,7 @@ int main(int argc, char** argv) {
 						}
 						LINE_WHILE_CONTINUE;
 					}
-					std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << '\n'; }
+					std::string* safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << *safestLine << '\n'; }
 					HistoryBuffer::pushWithAmountInc();
 				LINE_WHILE_END(HistoryBuffer::print())
 			}
@@ -941,9 +941,9 @@ int main(int argc, char** argv) {
 						}
 						LINE_WHILE_CONTINUE;
 					}
-					std::string safestLine;
+					std::string* safestLine;
 					if (HistoryBuffer::peekSafestLine(safestLine)) {
-						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << '\n'; }
+						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << *safestLine << '\n'; }
 					}
 					HistoryBuffer::pushWithAmountInc();
 					lineCounter++;
@@ -983,7 +983,7 @@ int main(int argc, char** argv) {
 					}
 					LINE_WHILE_CONTINUE;
 				}
-				std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << '\n'; }
+				std::string* safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << *safestLine << '\n'; }
 				HistoryBuffer::pushWithAmountInc();
 			LINE_WHILE_END(HistoryBuffer::print())
 		}
