@@ -316,6 +316,7 @@ public:
 	}
 
 	VectorString& operator=(std::string&& stringTemp) {
+		// TODO: Figure out how to move from a string, it has to be possible to implement your own move semantics things with already existing std lib stuff like std::string. How do I invalidate the std::string instance so the destructor doesn't mess up the allocated data.
 		return *this;
 	}
 
@@ -729,6 +730,7 @@ void highlightMatches() {																							// I assume this will be inlined
 		// CURRENT_LINE_ALIAS = std::move((const std::string)matchData.suffix().str());			// SUPER-IMPORTANT_TODO: For some reason, this line compiles, even though intellisense is adamant that it's an issue.
 		//CURRENT_LINE_ALIAS = (const std::string&&)std::move((const std::string)matchData.suffix().str());				// This line doesn't compile though, even though it is the same thing.
 					// SUPER-IMPORTANT-TODO: The above issue seems to be a bug in the compiler, which you should definitely tell someone through some feedback thing. Best option would be to post the issue on Stackoverflow and see if it's actually a bug or not.
+		CURRENT_LINE_ALIAS = matchData.suffix().str();
 	} while (REGEX_SEARCH);
 }
 
