@@ -1,7 +1,11 @@
 // Memory usage.
-#define INPUT_STREAM_BUFFER_MAX_SIZE (8129 * 1024)					// 8 MG
+#define INPUT_STREAM_BUFFER_MAX_SIZE (8192 * 1024)					// 8 MG
 #define INPUT_STREAM_BUFFER_START_SIZE 8192							// NOTE: Popular file sys block sizes (aka. logical block sizes) are 4KB and 8KB. We start the buffer at 8KB and scale with 8KB until a max size of 8MG.
-#define INPUT_STREAM_BUFFER_SIZE_STEP 8129							// NOTE: This is to try to get the buffer to be a multiple of file sys block size. This system works great for block sizes under 8KB too because the block sizes are in powers of two and 8KB covers the alignment fo 4KB perfectly.
+#define INPUT_STREAM_BUFFER_SIZE_STEP 8192							// NOTE: This is to try to get the buffer to be a multiple of file sys block size. This system works great for block sizes under 8KB too because the block sizes are in powers of two and 8KB covers the alignment fo 4KB perfectly.
+
+#define VECTOR_STRING_BUFFER_MAX_SIZE (8192 * 1024 * 4)
+#define VECTOR_STRING_BUFFER_START_SIZE 8192
+#define VECTOR_STRING_BUFFER_STEP_SIZE 8192
 
 // NOTE: AFAIK, the file system block size is a unit of work for the file system. File reads are done in blocks which are the size of the file system block size.
 // If the buffer isn't a multiple of the file system block size, we could end up reading way more data from the file than we need (1 extra block), even if we're just a couple of bytes
@@ -215,12 +219,117 @@ namespace flags {
 // Keeps track of the current line so a variety of helper functions can do things with it.
 size_t lineCounter = 1;
 
+class VectorString {							// TODO: This is essentially a replacement for the std::string class for this program. Before you keep working on this, you should probably get the other code ready to accept the new class.
+public:
+	char* buffer;
+	size_t bufferSize = 0;
+	size_t bufferWriteHead = 0;
+
+	VectorString() { buffer = new char[VECTOR_STRING_BUFFER_START_SIZE]; }
+
+	bool enoughSpaceForAddition(size_t additionSize) { return bufferSize - bufferWriteHead >= additionSize; }
+
+	bool allocateMoreSpace() {
+		size_t newSize = bufferSize + VECTOR_STRING_BUFFER_STEP_SIZE;					// TODO: Is it better to use the extra variable or not?
+		if (newSize > VECTOR_STRING_BUFFER_MAX_SIZE) { return false; }
+		char* tempBuffer = (char*)realloc(buffer, newSize);
+		if (tempBuffer) { bufferSize = newSize; buffer = tempBuffer; return true; }
+		return false;
+	}
+
+	// NOTE: The following usages of enoughSpaceForAddition() technically are inefficient, because you could add to bufferWriteHead and check if it goes past bounds before using it, which would be better.
+	// It would be better because the rate of success of the enoughSpaceForAddition() functions is far above 50%, which means optimizing for that case is better.
+	// This would prevent us from putting the code in a function though, which would make the code look worse.
+	// I'm going to leave the optimization out in the hope that the compiler will optimize this for me, since it's very simple and should be pretty easy for it to understand.
+
+	bool operator+=(const char& character) {
+		if (enoughSpaceForAddition(sizeof(character))) { buffer[bufferWriteHead] = character; bufferWriteHead++; return true; }
+		if (allocateMoreSpace()) { buffer[bufferWriteHead] = character; bufferWriteHead++; return true; }
+		return false;
+	}
+
+	bool operator+=(const uint16_t& characters) {
+		if (enoughSpaceForAddition(sizeof(characters))) { *(uint16_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (allocateMoreSpace()) { *(uint16_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		return false;
+	}
+
+	bool operator+=(const uint32_t& characters) {
+		if (enoughSpaceForAddition(sizeof(characters))) { *(uint32_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (allocateMoreSpace()) { *(uint32_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		return false;
+	}
+
+	bool operator+=(const uint64_t& characters) {
+		if (enoughSpaceForAddition(sizeof(characters))) { addition: *(uint64_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (allocateMoreSpace()) { goto addition; }
+		return false;
+	}
+
+	bool write3(const char* characters) {
+		if (enoughSpaceForAddition(3)) {
+		addition:
+			char* position = buffer + bufferWriteHead;
+			*(uint16_t*)(position) = *(uint16_t*)characters;
+			*(position + 2) = *(characters + 2);
+			bufferWriteHead += 3;
+		}
+		if (allocateMoreSpace()) { goto addition; }
+		return false;
+	}
+
+	bool write5(const char* characters) {
+		if (enoughSpaceForAddition(5)) {
+		addition:
+			char* position = buffer + bufferWriteHead;
+			*(uint32_t*)(position) = *(uint32_t*)characters;
+			*(position + 4) = *(characters + 4);
+			bufferWriteHead += 5;
+		}
+		if (allocateMoreSpace()) { goto addition; }
+		return false;
+	}
+
+	bool write6(const char* characters) {
+		if (enoughSpaceForAddition(6)) {
+		addition:
+			char* position = buffer + bufferWriteHead;
+			*(uint32_t*)(position) = *(uint32_t*)characters;
+			*(uint16_t*)(position + 4) = *(uint16_t*)(characters + 4);
+			bufferWriteHead += 6;
+		}
+		if (allocateMoreSpace()) { goto addition; }
+		return false;
+	}
+
+	bool write7(const char* characters) {
+		if (enoughSpaceForAddition(7)) {
+		addition:
+			char* position = buffer + bufferWriteHead;
+			*(uint32_t*)(position) = *(uint32_t*)characters;
+			*(uint16_t*)(position + 4) = *(uint16_t*)(characters + 4);
+			*(position + 6) = *(characters + 6);
+			bufferWriteHead += 7;
+		}
+		if (allocateMoreSpace()) { goto addition; }
+		return false;
+	}
+
+	VectorString& operator=(std::string&& stringTemp) {
+		return *this;
+	}
+
+	void clear() { bufferWriteHead = 0; }
+
+	~VectorString() { delete[] buffer; }
+};
+
 class HistoryBuffer {
 	static unsigned int buffer_len;
 	static unsigned int beginIndex;
 
 public:
-	static std::string* buffer;
+	static VectorString* buffer;
 	static unsigned int buffer_lastIndex;
 	static unsigned int amountFilled;																	// This variable isn't always used, only for specific modes where keeping track of amount of filled slots is the most efficient way.
 	static unsigned int index;
@@ -231,7 +340,7 @@ public:
 
 	static void init() {
 		buffer_len = buffer_lastIndex + 1;
-		buffer = new std::string[buffer_len];
+		buffer = new VectorString[buffer_len];
 	}
 
 	static void push() {
@@ -249,7 +358,7 @@ public:
 
 	static void purgeWithAmountSet() { purge(); purgeAmountFilled(); }
 
-	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout << buffer[beginIndex] << '\n'; } }			// NOTE: It is important to use '\n' instead of std::endl because std::endl puts a newline into the stream but also flushes it, which is a syscall, which is super slow. '\n' doesn't flush, so faster.
+	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout.write(buffer[beginIndex].buffer, buffer[beginIndex].bufferWriteHead) << '\n'; } }			// NOTE: It is important to use '\n' instead of std::endl because std::endl puts a newline into the stream but also flushes it, which is a syscall, which is super slow. '\n' doesn't flush, so faster.
 
 	// NOTE: We could store the amount filled and edit the variable with every call to push(), but I doubt that would be efficient since push is called so many more times than print is (at least normally).
 	// Doing that would cause amountFilled to be added to over and over with little return on the investment. That's why we're just calculating amountFilled every time we need it, that way push() doesn't have to waste it's time incrementing anything.
@@ -260,23 +369,23 @@ public:
 	static void printLinesWithLineNums() {
 		if (index == beginIndex) { return; }
 		lineCounter -= calculateAmountFilled();
-		std::cout << lineCounter << ' ' << buffer[beginIndex] << '\n';
+		(std::cout << lineCounter << ' ').write(buffer[beginIndex].buffer, buffer[beginIndex].bufferWriteHead) << '\n';
 		lineCounter++;
 		beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1);
-		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) { std::cout << lineCounter << ' ' << buffer[beginIndex] << '\n'; }
+		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) { (std::cout << lineCounter << ' ').write(buffer[beginIndex].buffer, buffer[beginIndex].bufferWriteHead) << '\n'; }
 	}
 
 	static void lastPrintLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << '\n'; } }
 	static void printLineNums() { lastPrintLineNums(); purgeAmountFilled(); }
 
-	static bool peekSafestLine(std::string& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer[beginIndex]; return true; } return false; }				// TODO: This does a deep copy, why are we doing that? Shouldn't we just return a pointer or a reference?
+	static bool peekSafestLine(VectorString*& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer + beginIndex; return true; } return false; }				// TODO: This does a deep copy, why are we doing that? Shouldn't we just return a pointer or a reference?
 
 	static bool peekSafestLineNum(size_t& safestNum) { if (amountFilled == buffer_lastIndex) { safestNum = lineCounter - buffer_lastIndex; return true; } return false; }
 
 	static void release() { delete[] buffer; }
 };
 
-std::string* HistoryBuffer::buffer;
+VectorString* HistoryBuffer::buffer;
 unsigned int HistoryBuffer::buffer_len;
 unsigned int HistoryBuffer::index = 0;
 unsigned int HistoryBuffer::beginIndex = 0;
@@ -431,15 +540,6 @@ void manageArgs(int argc, char** argv) {
 	}
 }
 
-class StringBuilder {							// TODO: This is essentially a replacement for the std::string class for this program. Before you keep working on this, you should probably get the other code ready to accept the new class.
-public:
-	char* buffer;
-
-	StringBuilder() { buffer = new char[STRING_BUILDER_BUFFER_START_SIZE]; }
-
-	~StringBuilder() { delete[] buffer; }
-};
-
 #ifdef PLATFORM_WINDOWS
 typedef int ssize_t;					// TODO: Make sure this syntax is correct.
 #endif
@@ -461,6 +561,8 @@ public:
 
 	static ssize_t bytesRead;																						// Position of read head in buffer.
 	static ssize_t bytesReceived;																					// Position of write head in buffer.
+
+	static bool isReadPositionUnaligned;
 
 public:
 	static void init() {
@@ -523,7 +625,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		return true;
 	}
 
-	static bool readLine(StringBuilder& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
+	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
+	static bool readLine(VectorString& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
 #ifdef REMOVE_THE_FOLLOWING_CODE
 		if (std::getline(std::cin, line)) { return true; }															// Get line. Technically, eofbit gets set if EOF terminates the line, but we don't worry about that because in that case we have to return true as well.
 		// NOTE: Technically, one could put the below line above std::getline, but that would do an unnecessary branch for every readLine in the file. This way, the branch is only tested when it has to be, which induces small overhead at EOF but saves a bunch of overhead in the loops.
@@ -535,17 +638,31 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		return false;
 
 #else
+
+		// NOTE: We could implement transfers that are more than one byte wide in this alignment code like we did in the transfer code that comes after, but that would be a lot of work and produce a lot of code.
+		// TODO: There might be a way to implement it that I haven't thought of, but as it stands, I'm leaving it as a future improvement.
+		if (isReadPositionUnaligned) {
+			for (; bytesRead < bytesRead + 8 - (bytesRead % 8) - 1; bytesRead++) {							// TODO: The limiting clause could probably be made more efficient with some bit twiddling. Research that.
+				if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
+				if (!(line += buffer[bytesRead])) { return false; }
+			}
+			if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = false; return true; }
+			if (!(line += buffer[bytesRead])) { return false; }
+			bytesRead++;
+			isReadPositionUnaligned = false;
+		}
+
 		while (true) {
 			for (; bytesRead < bytesReceived; bytesRead += 8) {														// Read all the data in the buffer.
-				if (buffer[bytesRead + 0] == '\n') { return true; }
-				if (buffer[bytesRead + 1] == '\n') { line += buffer[bytesRead]; return true; }										// Stop when we encounter the end of the current line.
-				if (buffer[bytesRead + 2] == '\n') { line += *(uint16_t*)(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 3] == '\n') { line.write3(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 4] == '\n') { line += *(uint32_t*)(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 5] == '\n') { line.write5(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 6] == '\n') { line.write6(buffer + bytesRead); return true; }
-				if (buffer[bytesRead + 7] == '\n') { line.write7(buffer + bytesRead); return true; }
-				line += *(uint64_t*)(buffer + bytesRead); return true;
+				if (buffer[bytesRead + 0] == '\n') { bytesRead++; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 1] == '\n') { if (!(line += buffer[bytesRead])) { return false; } bytesRead += 2; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 2] == '\n') { if (!(line += *(uint16_t*)(buffer + bytesRead))) { return false; } bytesRead += 3; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 3] == '\n') { if (!line.write3(buffer + bytesRead)) { return false; } bytesRead += 4; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 4] == '\n') { if (!(line += *(uint32_t*)(buffer + bytesRead))) { return false; } bytesRead += 5; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 5] == '\n') { if (!line.write5(buffer + bytesRead)) { return false; } bytesRead += 6; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 6] == '\n') { if (!line.write6(buffer + bytesRead)) { return false; } bytesRead += 7; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 7] == '\n') { if (!line.write7(buffer + bytesRead)) { return false; } bytesRead += 8; return true; }
+				if (!(line += *(uint64_t*)(buffer + bytesRead))) { return false; }
 			}
 			if (refillBuffer()) { continue; }																		// If we never encounter the end of the line in the current buffer, fetch more data.
 			return false;																							// If something went wrong while refilling buffer, return false.
@@ -594,19 +711,25 @@ size_t InputStream::bufferSize = INPUT_STREAM_BUFFER_START_SIZE;
 ssize_t InputStream::bytesRead = 0;
 ssize_t InputStream::bytesReceived = 0;
 
-std::smatch matchData;
+bool InputStream::isReadPositionUnaligned = false;
+
+std::cmatch matchData;
 
 #define CURRENT_LINE_ALIAS HistoryBuffer::buffer[HistoryBuffer::index]
+#define REGEX_SEARCH std::regex_search((const char*)CURRENT_LINE_ALIAS.buffer, (const char*)(CURRENT_LINE_ALIAS.bufferWriteHead + CURRENT_LINE_ALIAS.buffer), matchData, keyphraseRegex)
 
 void highlightMatches() {																							// I assume this will be inlined. Probably not in debug mode, but almost definitely in release mode.
 	do {
 		ptrdiff_t matchPosition = matchData.position();
-		std::cout.write(CURRENT_LINE_ALIAS.c_str(), matchPosition);
+		std::cout.write(CURRENT_LINE_ALIAS.buffer, matchPosition);
 		std::cout << color::red;
-		std::cout.write(CURRENT_LINE_ALIAS.c_str() + matchPosition, matchData.length());
+		std::cout.write(CURRENT_LINE_ALIAS.buffer + matchPosition, matchData.length());
 		std::cout << color::reset;
-		CURRENT_LINE_ALIAS = matchData.suffix();
-	} while (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex));
+		// TODO: This doesn't work without somehow changing the current line to the suffix with as little overhead as possible.
+		// CURRENT_LINE_ALIAS = std::move((const std::string)matchData.suffix().str());			// SUPER-IMPORTANT_TODO: For some reason, this line compiles, even though intellisense is adamant that it's an issue.
+		//CURRENT_LINE_ALIAS = (const std::string&&)std::move((const std::string)matchData.suffix().str());				// This line doesn't compile though, even though it is the same thing.
+					// SUPER-IMPORTANT-TODO: The above issue seems to be a bug in the compiler, which you should definitely tell someone through some feedback thing. Best option would be to post the issue on Stackoverflow and see if it's actually a bug or not.
+	} while (REGEX_SEARCH);
 }
 
 // A couple of #defines to help reduce code bloat in the coming sections of the program.
@@ -724,31 +847,31 @@ int main(int argc, char** argv) {
 			if (flags::inverted) { return 0; }
 			if (flags::only_line_nums) {
 				LINE_WHILE_START
-					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
+					if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
 					std::cout << lineCounter << '\n'; lineCounter++;
 				LINE_WHILE_END()
 			}
 			if (flags::lineNums) {						// NOTE: One would think that an improvement would be to snap all line numbers to the same column so as to avoid the text shifting to the right when line numbers go from 9 to 10 or from 99 to 100, but thats easier said than done, because we don't actually know how much room to leave in the column before reading the whole file.
 				LINE_WHILE_START				// NOTE: Since we should be prepared to read incredibly long files, I'm going to leave the snapping out, since we can't really implement it without giving ourselves a maximum amount of line numbers we can traverse.
-					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
-					std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; lineCounter++;
+					if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << matchData.suffix() << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
+					(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++;
 				LINE_WHILE_END()
 			}
-			LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { highlightMatches(); } std::cout << CURRENT_LINE_ALIAS << '\n'; LINE_WHILE_END()
+			LINE_WHILE_START if (REGEX_SEARCH) { highlightMatches(); std::cout << matchData.suffix() << '\n'; } else { std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; } LINE_WHILE_END()
 		}
 
 		if (flags::context) {
 			if (flags::only_line_nums) {
 				if (flags::inverted) {
 					LINE_WHILE_START
-						if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+						if (REGEX_SEARCH) {
 							HistoryBuffer::purgeAmountFilled();
 							lineCounter++;
 							for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 								INNER_WINDOWS_SIGNAL_CHECK_START
 									CURRENT_LINE_ALIAS.clear();
 									INNER_INPUT_STREAM_READ_LINE
-									if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
+									if (REGEX_SEARCH) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
 									lineCounter++;
 								INNER_WINDOWS_SIGNAL_CHECK_END
 							}
@@ -760,7 +883,7 @@ int main(int argc, char** argv) {
 					LINE_WHILE_END(HistoryBuffer::lastPrintLineNums())
 				}
 				LINE_WHILE_START
-					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+					if (REGEX_SEARCH) {
 						HistoryBuffer::printLineNums();
 						std::cout << color::red << lineCounter << color::reset << '\n';
 						lineCounter++;
@@ -768,7 +891,7 @@ int main(int argc, char** argv) {
 							INNER_WINDOWS_SIGNAL_CHECK_START																									// SIDE-NOTE: Even so, I like the way for loops look because you see the information for the loop at the top and not all the way at the bottom, plus, compiler optimizes.
 								CURRENT_LINE_ALIAS.clear();
 								INNER_INPUT_STREAM_READ_LINE
-								if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+								if (REGEX_SEARCH) {
 									std::cout << color::red << lineCounter << color::reset << '\n';
 									lineCounter++;
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
@@ -787,43 +910,43 @@ int main(int argc, char** argv) {
 			if (flags::lineNums) {
 				if (flags::inverted) {
 					LINE_WHILE_START
-						if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+						if (REGEX_SEARCH) {
 							HistoryBuffer::purgeWithAmountSet();
 							lineCounter++;
 							for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 								INNER_WINDOWS_SIGNAL_CHECK_START
 									CURRENT_LINE_ALIAS.clear();
 									INNER_INPUT_STREAM_READ_LINE
-									if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
+									if (REGEX_SEARCH) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
 									lineCounter++;
 								INNER_WINDOWS_SIGNAL_CHECK_END
 							}
 							LINE_WHILE_CONTINUE;
 						}
-						std::string safestLine;
+						VectorString* safestLine;
 						if (HistoryBuffer::peekSafestLine(safestLine)) {
-							size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << '\n'; }
+							size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { (std::cout << safestLineNum << ' ').write(safestLine->buffer, safestLine->bufferWriteHead) << '\n'; }
 						}
 						HistoryBuffer::pushWithAmountInc();
 						lineCounter++;
 					LINE_WHILE_END(HistoryBuffer::printLinesWithLineNums())
 				}
 				LINE_WHILE_START
-					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+					if (REGEX_SEARCH) {
 						HistoryBuffer::printLinesWithLineNums();
-						std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n';
+						std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << matchData.suffix() << '\n';
 						lineCounter++;
 						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 							INNER_WINDOWS_SIGNAL_CHECK_START
 								CURRENT_LINE_ALIAS.clear();
 								INNER_INPUT_STREAM_READ_LINE
-								if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
-									std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n';
+								if (REGEX_SEARCH) {
+									std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << matchData.suffix() << '\n';
 									lineCounter++;
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
 									continue;
 								}
-								std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n';
+								(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
 								lineCounter++;
 							INNER_WINDOWS_SIGNAL_CHECK_END
 						}
@@ -835,36 +958,36 @@ int main(int argc, char** argv) {
 			}
 			if (flags::inverted) {
 				LINE_WHILE_START
-					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+					if (REGEX_SEARCH) {
 						HistoryBuffer::purgeWithAmountSet();
 						for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 							INNER_WINDOWS_SIGNAL_CHECK_START
 								CURRENT_LINE_ALIAS.clear();
 								INNER_INPUT_STREAM_READ_LINE
-								if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { padding = HistoryBuffer::buffer_lastIndex; continue; }
+								if (REGEX_SEARCH) { padding = HistoryBuffer::buffer_lastIndex; continue; }
 								padding--;
 							INNER_WINDOWS_SIGNAL_CHECK_END
 						}
 						LINE_WHILE_CONTINUE;
 					}
-					std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << '\n'; }
+					VectorString* safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout.write(safestLine->buffer, safestLine->bufferWriteHead) << '\n'; }
 					HistoryBuffer::pushWithAmountInc();
 				LINE_WHILE_END(HistoryBuffer::print())
 			}
 			LINE_WHILE_START
-				if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+				if (REGEX_SEARCH) {
 					HistoryBuffer::print();
-					highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n';
+					highlightMatches(); std::cout << matchData.suffix() << '\n';
 					for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							CURRENT_LINE_ALIAS.clear();
 							INNER_INPUT_STREAM_READ_LINE
-							if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
-								highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n';
+							if (REGEX_SEARCH) {
+								highlightMatches(); std::cout << matchData.suffix() << '\n';
 								padding = HistoryBuffer::buffer_lastIndex;
 								continue;
 							}
-							std::cout << CURRENT_LINE_ALIAS << '\n';
+							std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
 							padding--;
 						INNER_WINDOWS_SIGNAL_CHECK_END
 					}
@@ -879,37 +1002,37 @@ int main(int argc, char** argv) {
 		// So I think the if statement approach is a good one, even though it's technically a very small bit less performant than the switch case approach.
 
 		if (flags::inverted) {
-			if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << '\n'; lineCounter++; LINE_WHILE_END() }
-			if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; lineCounter++; LINE_WHILE_END() }
-			LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE } std::cout << CURRENT_LINE_ALIAS << '\n'; LINE_WHILE_END()
+			if (flags::only_line_nums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << '\n'; lineCounter++; LINE_WHILE_END() }
+			if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++; LINE_WHILE_END() }
+			LINE_WHILE_START if (REGEX_SEARCH) { LINE_WHILE_CONTINUE } std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; LINE_WHILE_END()
 		}
 		if (flags::only_line_nums) {
-			if (forcedOutputColoring) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << '\n'; } lineCounter++; LINE_WHILE_END() }
-			COLORED_RED_ONLY_LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << '\n'; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END()
+			if (forcedOutputColoring) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << '\n'; } lineCounter++; LINE_WHILE_END() }
+			COLORED_RED_ONLY_LINE_WHILE_START if (REGEX_SEARCH) { std::cout << lineCounter << '\n'; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END()
 		}
-		if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; } lineCounter++; LINE_WHILE_END() }
-		LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { highlightMatches(); std::cout << CURRENT_LINE_ALIAS << '\n'; } LINE_WHILE_END()
+		if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << matchData.suffix() << '\n'; } lineCounter++; LINE_WHILE_END() }
+		LINE_WHILE_START if (REGEX_SEARCH) { highlightMatches(); std::cout << matchData.suffix() << '\n'; } LINE_WHILE_END()
 	}
 
 	if (flags::allLines) {
 		if (flags::inverted) { return 0; }
 		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE std::cout << lineCounter << '\n'; lineCounter++; } }					// NOTE: At first glance, it looks like InputStream and HistoryBuffer aren't being released here, but they are. This code is completely fine.
-		if (flags::lineNums) { LINE_WHILE_START std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; lineCounter++; LINE_WHILE_END() }
-		LINE_WHILE_START std::cout << CURRENT_LINE_ALIAS << '\n'; LINE_WHILE_END()
+		if (flags::lineNums) { LINE_WHILE_START (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++; LINE_WHILE_END() }
+		LINE_WHILE_START std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; LINE_WHILE_END()
 	}
 
 	if (flags::context) {
 		if (flags::only_line_nums) {
 			if (flags::inverted) {
 				LINE_WHILE_START
-					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+					if (REGEX_SEARCH) {
 						HistoryBuffer::purgeAmountFilled();
 						lineCounter++;
 						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 							INNER_WINDOWS_SIGNAL_CHECK_START
 								CURRENT_LINE_ALIAS.clear();
 								INNER_INPUT_STREAM_READ_LINE
-								if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
+								if (REGEX_SEARCH) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
 								lineCounter++;
 							INNER_WINDOWS_SIGNAL_CHECK_END
 						}
@@ -921,7 +1044,7 @@ int main(int argc, char** argv) {
 				LINE_WHILE_END(HistoryBuffer::lastPrintLineNums())
 			}
 			LINE_WHILE_START
-				if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+				if (REGEX_SEARCH) {
 					HistoryBuffer::printLineNums();
 					std::cout << lineCounter << '\n';
 					lineCounter++;
@@ -931,7 +1054,7 @@ int main(int argc, char** argv) {
 							INNER_INPUT_STREAM_READ_LINE
 							std::cout << lineCounter << '\n';
 							lineCounter++;
-							if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
+							if (REGEX_SEARCH) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
 						INNER_WINDOWS_SIGNAL_CHECK_END
 					}
 					LINE_WHILE_CONTINUE;
@@ -943,39 +1066,39 @@ int main(int argc, char** argv) {
 		if (flags::lineNums) {
 			if (flags::inverted) {
 				LINE_WHILE_START
-					if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+					if (REGEX_SEARCH) {
 						HistoryBuffer::purgeWithAmountSet();
 						lineCounter++;
 						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 							INNER_WINDOWS_SIGNAL_CHECK_START
 								CURRENT_LINE_ALIAS.clear();
 								INNER_INPUT_STREAM_READ_LINE
-								if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
+								if (REGEX_SEARCH) { lineCounter++; afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; continue; }
 								lineCounter++;
 							INNER_WINDOWS_SIGNAL_CHECK_END
 						}
 						LINE_WHILE_CONTINUE;
 					}
-					std::string safestLine;
+					VectorString* safestLine;
 					if (HistoryBuffer::peekSafestLine(safestLine)) {
-						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { std::cout << safestLineNum << ' ' << safestLine << '\n'; }
+						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { (std::cout << safestLineNum << ' ').write(safestLine->buffer, safestLine->bufferWriteHead) << '\n'; }
 					}
 					HistoryBuffer::pushWithAmountInc();
 					lineCounter++;
 				LINE_WHILE_END(HistoryBuffer::printLinesWithLineNums())
 			}
 			LINE_WHILE_START
-				if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+				if (REGEX_SEARCH) {
 					HistoryBuffer::printLinesWithLineNums();
-					std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n';
+					(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
 					lineCounter++;
 					for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							CURRENT_LINE_ALIAS.clear();
 							INNER_INPUT_STREAM_READ_LINE
-							std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n';
+							(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
 							lineCounter++;
-							if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
+							if (REGEX_SEARCH) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
 						INNER_WINDOWS_SIGNAL_CHECK_END
 					}
 					LINE_WHILE_CONTINUE;
@@ -986,36 +1109,36 @@ int main(int argc, char** argv) {
 		}
 		if (flags::inverted) {
 			LINE_WHILE_START
-				if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+				if (REGEX_SEARCH) {
 					HistoryBuffer::purgeWithAmountSet();
 					for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							CURRENT_LINE_ALIAS.clear();
 							INNER_INPUT_STREAM_READ_LINE
-							if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { padding = HistoryBuffer::buffer_lastIndex; continue; }
+							if (REGEX_SEARCH) { padding = HistoryBuffer::buffer_lastIndex; continue; }
 							padding--;
 						INNER_WINDOWS_SIGNAL_CHECK_END
 					}
 					LINE_WHILE_CONTINUE;
 				}
-				std::string safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout << safestLine << '\n'; }
+				VectorString* safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout.write(safestLine->buffer, safestLine->bufferWriteHead) << '\n'; }
 				HistoryBuffer::pushWithAmountInc();
 			LINE_WHILE_END(HistoryBuffer::print())
 		}
 		LINE_WHILE_START
-			if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
+			if (REGEX_SEARCH) {
 				HistoryBuffer::print();
-				std::cout << CURRENT_LINE_ALIAS << '\n';
+				std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
 				for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 					INNER_WINDOWS_SIGNAL_CHECK_START
 						CURRENT_LINE_ALIAS.clear();
 						INNER_INPUT_STREAM_READ_LINE
-						if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) {
-							std::cout << CURRENT_LINE_ALIAS << '\n';
+						if (REGEX_SEARCH) {
+							std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
 							padding = HistoryBuffer::buffer_lastIndex;
 							continue;
 						}
-						std::cout << CURRENT_LINE_ALIAS << '\n';
+						std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
 						padding--;
 					INNER_WINDOWS_SIGNAL_CHECK_END
 				}
@@ -1026,13 +1149,13 @@ int main(int argc, char** argv) {
 	}
 
 	if (flags::inverted) {
-		if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << '\n'; lineCounter++; LINE_WHILE_END() }
-		if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; lineCounter++; LINE_WHILE_END() }
-		LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { LINE_WHILE_CONTINUE; } std::cout << CURRENT_LINE_ALIAS << '\n'; LINE_WHILE_END()
+		if (flags::only_line_nums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << '\n'; lineCounter++; LINE_WHILE_END() }
+		if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++; LINE_WHILE_END() }
+		LINE_WHILE_START if (REGEX_SEARCH) { LINE_WHILE_CONTINUE; } std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; LINE_WHILE_END()
 	}
-	if (flags::only_line_nums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << '\n'; } lineCounter++; LINE_WHILE_END() }
-	if (flags::lineNums) { LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << lineCounter << ' ' << CURRENT_LINE_ALIAS << '\n'; } lineCounter++; LINE_WHILE_END() }
-	LINE_WHILE_START if (std::regex_search(CURRENT_LINE_ALIAS, matchData, keyphraseRegex)) { std::cout << CURRENT_LINE_ALIAS << '\n'; } LINE_WHILE_END()
+	if (flags::only_line_nums) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << lineCounter << '\n'; } lineCounter++; LINE_WHILE_END() }
+	if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; } lineCounter++; LINE_WHILE_END() }
+	LINE_WHILE_START if (REGEX_SEARCH) { std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; } LINE_WHILE_END()
 }
 
 /*
