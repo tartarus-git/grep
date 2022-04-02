@@ -222,7 +222,7 @@ size_t lineCounter = 1;
 class VectorString {							// TODO: This is essentially a replacement for the std::string class for this program. Before you keep working on this, you should probably get the other code ready to accept the new class.
 public:
 	char* buffer;
-	size_t bufferSize = 0;
+	size_t bufferSize = VECTOR_STRING_BUFFER_START_SIZE;
 	size_t bufferWriteHead = 0;
 
 	VectorString() { buffer = new char[VECTOR_STRING_BUFFER_START_SIZE]; }
@@ -230,6 +230,8 @@ public:
 	bool enoughSpaceForAddition(size_t additionSize) { return bufferSize - bufferWriteHead >= additionSize; }
 
 	bool allocateMoreSpace() {
+		std::cout << ("this is broken currently because the contents aren't copied, fix that. TODO");
+		DebugBreak();
 		size_t newSize = bufferSize + VECTOR_STRING_BUFFER_STEP_SIZE;					// TODO: Is it better to use the extra variable or not?
 		if (newSize > VECTOR_STRING_BUFFER_MAX_SIZE) { return false; }
 		char* tempBuffer = (char*)realloc(buffer, newSize);
@@ -273,6 +275,7 @@ public:
 			*(uint16_t*)(position) = *(uint16_t*)characters;
 			*(position + 2) = *(characters + 2);
 			bufferWriteHead += 3;
+			return true;
 		}
 		if (allocateMoreSpace()) { goto addition; }
 		return false;
@@ -285,6 +288,7 @@ public:
 			*(uint32_t*)(position) = *(uint32_t*)characters;
 			*(position + 4) = *(characters + 4);
 			bufferWriteHead += 5;
+			return true;
 		}
 		if (allocateMoreSpace()) { goto addition; }
 		return false;
@@ -297,6 +301,7 @@ public:
 			*(uint32_t*)(position) = *(uint32_t*)characters;
 			*(uint16_t*)(position + 4) = *(uint16_t*)(characters + 4);
 			bufferWriteHead += 6;
+			return true;
 		}
 		if (allocateMoreSpace()) { goto addition; }
 		return false;
@@ -310,14 +315,10 @@ public:
 			*(uint16_t*)(position + 4) = *(uint16_t*)(characters + 4);
 			*(position + 6) = *(characters + 6);
 			bufferWriteHead += 7;
+			return true;
 		}
 		if (allocateMoreSpace()) { goto addition; }
 		return false;
-	}
-
-	VectorString& operator=(std::string&& stringTemp) {
-		// TODO: Figure out how to move from a string, it has to be possible to implement your own move semantics things with already existing std lib stuff like std::string. How do I invalidate the std::string instance so the destructor doesn't mess up the allocated data.
-		return *this;
 	}
 
 	void clear() { bufferWriteHead = 0; }
@@ -643,15 +644,20 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		// NOTE: We could implement transfers that are more than one byte wide in this alignment code like we did in the transfer code that comes after, but that would be a lot of work and produce a lot of code.
 		// TODO: There might be a way to implement it that I haven't thought of, but as it stands, I'm leaving it as a future improvement.
 		if (isReadPositionUnaligned) {
-			for (; bytesRead < bytesRead + 8 - (bytesRead % 8) - 1; bytesRead++) {							// TODO: The limiting clause could probably be made more efficient with some bit twiddling. Research that.
+			for (; bytesRead < bytesRead + 8 - (bytesRead % 8) - 1 && bytesRead < bytesReceived; bytesRead++) {							// TODO: The limiting clause could probably be made more efficient with some bit twiddling. Research that.
 				if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
 				if (!(line += buffer[bytesRead])) { return false; }
 			}
+			if (bytesRead >= bytesReceived) { if (!refillBuffer()) { return false; } }
 			if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = false; return true; }
 			if (!(line += buffer[bytesRead])) { return false; }
 			bytesRead++;
 			isReadPositionUnaligned = false;
 		}
+
+		// TODO: This whole copying code could theoretically be avoided if we just always store the lines in the InputStream and just store indices to those lines in the HistoryBuffer.
+		// You would have to copy chunks of data around when resizing the InputStream, since we don't want those to get lost while doing that, but since the InputStream doesn't resize often in the grand scheme of things,
+		// it should actually be more efficient, with less overhead. It would be a major redesign and I don't want to do that right now, I'm leaving it as a future improvement.
 
 		while (true) {
 			for (; bytesRead < bytesReceived; bytesRead += 8) {														// Read all the data in the buffer.
@@ -717,21 +723,27 @@ bool InputStream::isReadPositionUnaligned = false;
 std::cmatch matchData;
 
 #define CURRENT_LINE_ALIAS HistoryBuffer::buffer[HistoryBuffer::index]
-#define REGEX_SEARCH std::regex_search((const char*)CURRENT_LINE_ALIAS.buffer, (const char*)(CURRENT_LINE_ALIAS.bufferWriteHead + CURRENT_LINE_ALIAS.buffer), matchData, keyphraseRegex)
+#define REGEX_SEARCH std::regex_search((const char*)CURRENT_LINE_ALIAS.buffer, (const char*)(CURRENT_LINE_ALIAS.buffer + CURRENT_LINE_ALIAS.bufferWriteHead), matchData, keyphraseRegex)
+
+ptrdiff_t matchSuffixIndex;
 
 void highlightMatches() {																							// I assume this will be inlined. Probably not in debug mode, but almost definitely in release mode.
+	matchSuffixIndex = 0;				// NOTE: Technically, unrolling the first iteration of the below loop would allow us to skip the overhead of initializing this variable to 0, but the compiler probably does it for us.
+	const char* stringBufferEnd = CURRENT_LINE_ALIAS.buffer + CURRENT_LINE_ALIAS.bufferWriteHead;
 	do {
-		ptrdiff_t matchPosition = matchData.position();
-		std::cout.write(CURRENT_LINE_ALIAS.buffer, matchPosition);
+		ptrdiff_t newMatchPosition = matchData.position();
+		std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, newMatchPosition);
 		std::cout << color::red;
-		std::cout.write(CURRENT_LINE_ALIAS.buffer + matchPosition, matchData.length());
+		matchSuffixIndex += newMatchPosition;
+		ptrdiff_t matchLength = matchData.length();
+		std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, matchLength);
 		std::cout << color::reset;
-		// TODO: This doesn't work without somehow changing the current line to the suffix with as little overhead as possible.
+		matchSuffixIndex += matchLength;
+		// The following assumes that I've got a copy assignment operator set up, which I don't anymore.
 		// CURRENT_LINE_ALIAS = std::move((const std::string)matchData.suffix().str());			// SUPER-IMPORTANT_TODO: For some reason, this line compiles, even though intellisense is adamant that it's an issue.
 		//CURRENT_LINE_ALIAS = (const std::string&&)std::move((const std::string)matchData.suffix().str());				// This line doesn't compile though, even though it is the same thing.
 					// SUPER-IMPORTANT-TODO: The above issue seems to be a bug in the compiler, which you should definitely tell someone through some feedback thing. Best option would be to post the issue on Stackoverflow and see if it's actually a bug or not.
-		CURRENT_LINE_ALIAS = matchData.suffix().str();
-	} while (REGEX_SEARCH);
+	} while (std::regex_search((const char*)(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex), (const char*)stringBufferEnd, matchData, keyphraseRegex));
 }
 
 // A couple of #defines to help reduce code bloat in the coming sections of the program.
@@ -744,7 +756,7 @@ void highlightMatches() {																							// I assume this will be inlined
 
 #define LINE_WHILE_START MAIN_WHILE { if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { break; }
 #ifdef PLATFORM_WINDOWS
-#define LINE_WHILE_END(cleanupCode) } cleanupCode; HistoryBuffer::release(); return 0;								// NOTE: As per the standard, you can use function-style macros while leaving one or more or all of the parameters blank. They just won't be filled with anything and you'll have empty spots, which is exactly the behaviour we want here, so everythings fine.
+#define LINE_WHILE_END(cleanupCode) CURRENT_LINE_ALIAS.clear(); } cleanupCode; HistoryBuffer::release(); return 0;								// NOTE: As per the standard, you can use function-style macros while leaving one or more or all of the parameters blank. They just won't be filled with anything and you'll have empty spots, which is exactly the behaviour we want here, so everythings fine.
 #else
 #define LINE_WHILE_END(cleanupCode) CURRENT_LINE_ALIAS.clear(); } cleanupCode; InputStream::release(); HistoryBuffer::release(); return 0;
 #endif
@@ -855,11 +867,12 @@ int main(int argc, char** argv) {
 			}
 			if (flags::lineNums) {						// NOTE: One would think that an improvement would be to snap all line numbers to the same column so as to avoid the text shifting to the right when line numbers go from 9 to 10 or from 99 to 100, but thats easier said than done, because we don't actually know how much room to leave in the column before reading the whole file.
 				LINE_WHILE_START				// NOTE: Since we should be prepared to read incredibly long files, I'm going to leave the snapping out, since we can't really implement it without giving ourselves a maximum amount of line numbers we can traverse.
-					if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << matchData.suffix() << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
+					if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
 					(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++;
 				LINE_WHILE_END()
 			}
-			LINE_WHILE_START if (REGEX_SEARCH) { highlightMatches(); std::cout << matchData.suffix() << '\n'; } else { std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; } LINE_WHILE_END()
+			LINE_WHILE_START if (REGEX_SEARCH) { highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n'; }
+			else { std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; } LINE_WHILE_END()
 		}
 
 		if (flags::context) {
@@ -936,14 +949,14 @@ int main(int argc, char** argv) {
 				LINE_WHILE_START
 					if (REGEX_SEARCH) {
 						HistoryBuffer::printLinesWithLineNums();
-						std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << matchData.suffix() << '\n';
+						std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n';
 						lineCounter++;
 						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 							INNER_WINDOWS_SIGNAL_CHECK_START
 								CURRENT_LINE_ALIAS.clear();
 								INNER_INPUT_STREAM_READ_LINE
 								if (REGEX_SEARCH) {
-									std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << matchData.suffix() << '\n';
+									std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n';
 									lineCounter++;
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
 									continue;
@@ -979,13 +992,13 @@ int main(int argc, char** argv) {
 			LINE_WHILE_START
 				if (REGEX_SEARCH) {
 					HistoryBuffer::print();
-					highlightMatches(); std::cout << matchData.suffix() << '\n';
+					highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n';
 					for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							CURRENT_LINE_ALIAS.clear();
 							INNER_INPUT_STREAM_READ_LINE
 							if (REGEX_SEARCH) {
-								highlightMatches(); std::cout << matchData.suffix() << '\n';
+								highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n';
 								padding = HistoryBuffer::buffer_lastIndex;
 								continue;
 							}
@@ -1012,8 +1025,8 @@ int main(int argc, char** argv) {
 			if (forcedOutputColoring) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << '\n'; } lineCounter++; LINE_WHILE_END() }
 			COLORED_RED_ONLY_LINE_WHILE_START if (REGEX_SEARCH) { std::cout << lineCounter << '\n'; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END()
 		}
-		if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout << matchData.suffix() << '\n'; } lineCounter++; LINE_WHILE_END() }
-		LINE_WHILE_START if (REGEX_SEARCH) { highlightMatches(); std::cout << matchData.suffix() << '\n'; } LINE_WHILE_END()
+		if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n'; } lineCounter++; LINE_WHILE_END() }
+		LINE_WHILE_START if (REGEX_SEARCH) { highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n'; } LINE_WHILE_END()
 	}
 
 	if (flags::allLines) {
