@@ -230,12 +230,30 @@ public:
 
 	bool enoughSpaceForAddition(size_t additionSize) { return bufferSize - bufferWriteHead >= additionSize; }
 
+	// NOTE: The following are super important points about reallocation of data, because there are some nuances to how things USUALLY behave on MOST hardware:
+	// realloc reallocates a block of memory with a different size and copies all of your data into the new block.
+	//			--> it has two behaviours (in the usual case):		1. scale the current allocation up or down if there is enough room in your partition of the heap (there is always enough room if you're scaling down).
+	//																2. else: free the current allocation and allocate a new block with the requested size. THE DATA IS COPIED FROM ONE BLOCK TO ANOTHER --> WARNING: if you scale down, data will be truncated.
+	// SIDE-NOTE: When data needs to be copied from block to block, realloc is still faster than free/malloc because optimizations can be implemented when both free and malloc are garanteed to happen right after one another inside of realloc.
+	// I presume, that instead of worrying about getting everything into a valid state after free(), you can go straight from one block allocation to the other, that's what I'm talking about with optimizations.
+	// Other than that, some OS's (Linux for example) will avoid copying the data even in the case that the block position changes. The genius solution: remap the new virtual memory space to the physical memory space of the old allocation location.
+	// By doing that, you've copied data with essentially no overhead relative to the original copy approach.
+	//
+	// IMPORTANT: BOTTOM-LINE: realloc is essentially always faster when you want to preserve the data. Use it in those cases.
+	//
+	// realloc isn't faster when you don't care about the data though, because realloc always copies the block data, which would in that case be super unnecessary.
+	// NOTE: I don't know how this behaves with the virtual memory optimization, maybe realloc should always be used in that case, but I'm going to assume that even in that case, realloc is suboptimal.
+	// SOLUTION: Use free/malloc when scaling a block up when you don't care about the data. Use realloc when scaling a block down when you don't care about the memory.
+	// NOTE: If you're reasonably certain that the block will scale up without repositioning itself, the better option would almost definitely be realloc, but if you can't garantee that, free/malloc is almost definitely better.
+	//			NOTE: According to a benchmark I found, realloc is ~7600x slower than free/malloc for scaling up when repositioning happens. It seems to be about 40 times faster when repositioning doesn't happen.
+	//			NOTE: So don't orient yourself by seeing if repositioning happens less than 50% of time. It needs to happen a lot less for realloc to be worth it. Calculate it.
+	//
+	// EXTRA: If you don't know whether your scaling the block up or down, free/malloc, because of the speed data given above this makes the most sense in these situations.
+
 	bool allocateMoreSpace() {
-		std::cout << ("this is broken currently because the contents aren't copied, fix that. TODO");
-		DebugBreak();
 		size_t newSize = bufferSize + VECTOR_STRING_BUFFER_STEP_SIZE;					// TODO: Is it better to use the extra variable or not?
 		if (newSize > VECTOR_STRING_BUFFER_MAX_SIZE) { return false; }
-		char* tempBuffer = (char*)realloc(buffer, newSize);
+		char* tempBuffer = (char*)realloc(buffer, newSize);										// NOTE: Use realloc because we want to keep the data in the VectorString.
 		if (tempBuffer) { bufferSize = newSize; buffer = tempBuffer; return true; }
 		return false;
 	}
@@ -569,7 +587,7 @@ public:
 
 public:
 	static void init() {
-		buffer = new char[bufferSize];																				// Initialize buffer with the starting amount of RAM space.
+		buffer = new char[INPUT_STREAM_BUFFER_START_SIZE];																				// Initialize buffer with the starting amount of RAM space.
 		
 #ifndef PLATFORM_WINDOWS
 		// Add SIGINT and SIGTERM to set of tracked signals.
@@ -620,8 +638,16 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		if (bytesReceived == bufferSize) {																			// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
 			size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;					// TODO: There is probably a way to avoid doing this addition when the buffer is at it's max. You need to do some macro magic with divisions and floors to find the exact value you need to stop at in compile-time.
 			if (newBufferSize <= INPUT_STREAM_BUFFER_MAX_SIZE) {
-				char* newBuffer = (char*)realloc(buffer, newBufferSize);
-				if (newBuffer) { buffer = newBuffer; bufferSize = newBufferSize; }
+				delete[] buffer;																// Delete current allocation to make room for the reallocation.
+				buffer = new (std::nothrow) char[newBufferSize];								// Try to allocate new block with increased size.
+				if (buffer) { bufferSize = newBufferSize; }
+				else {																			// If we fail, try to allocate the old black again in order to get back to how things were.
+					buffer = new (std::nothrow) char[bufferSize];								// NOTE: Because of the way this works, if the heap doesn't have any memory left, every call to refillBuffer from then on will have some extra overhead. INPUT_STREAM_BUFFER_MAX_SIZE should prevent this though, so no big deal.
+					if (!buffer) {																// If that fails and somehow the heap doesn't have any storage left even though it did a moment ago, throw an error.
+						reportError("reallocation of freed buffer memory failed, heap space snatched away by an unknown entity");			// NOTE: This error shouldn't ever happen theoretically, but I'm leaving it in in case some part of stdlib on a different thread or a debugger decides to change the heap while we're in the middle of reallocating.
+						return false;
+					}
+				}
 			}
 		}
 
