@@ -1,11 +1,11 @@
 // Memory usage.
-#define INPUT_STREAM_BUFFER_MAX_SIZE (8192 * 1024)					// 8 MG
-#define INPUT_STREAM_BUFFER_START_SIZE 8192							// NOTE: Popular file sys block sizes (aka. logical block sizes) are 4KB and 8KB. We start the buffer at 8KB and scale with 8KB until a max size of 8MG.
-#define INPUT_STREAM_BUFFER_SIZE_STEP 8192							// NOTE: This is to try to get the buffer to be a multiple of file sys block size. This system works great for block sizes under 8KB too because the block sizes are in powers of two and 8KB covers the alignment fo 4KB perfectly.
+#define INPUT_STREAM_BUFFER_MAX_SIZE (8192 * 1024)					// 8 MB		<-- ABSOLUTELY MUST be a multiple of INPUT_STREAM_BUFFER_SIZE_STEP, or else program will break in certain scenarios.
+#define INPUT_STREAM_BUFFER_START_SIZE 8192							// NOTE: Popular file sys block sizes (aka. logical block sizes) are 4KB and 8KB. We start the buffer at 8KB and scale with 8KB until a max size of 8MB.
+#define INPUT_STREAM_BUFFER_SIZE_STEP 8192							// NOTE: This is to try to get the buffer to be a multiple of file sys block size. This system works great for block sizes under 8KB too because the block sizes are in powers of two and 8KB covers the alignment for 4KB perfectly.
 
-#define VECTOR_STRING_BUFFER_MAX_SIZE (8192 * 1024 * 4)
-#define VECTOR_STRING_BUFFER_START_SIZE 8192
-#define VECTOR_STRING_BUFFER_STEP_SIZE 8192
+#define VECTOR_STRING_BUFFER_MAX_SIZE (8192 * 1024 * 4)				// 32 MB	<-- ABSOLUTELY MUST be a multiple of VECTOR_STRING_BUFFER_STEP_SIZE, or else program will break in certain scenarios.
+#define VECTOR_STRING_BUFFER_START_SIZE 8192						// NOTE: There shouldn't be a reason for these sizes to coincide with file sys block size like those above, since these are purely in memory. Just in case (and because there is no downside in this case), we set them to the same ones as above.
+#define VECTOR_STRING_BUFFER_STEP_SIZE 8192							// NOTE: I figure that, in case the OS needs to write some RAM to the swap space on the hard disk, this will make our memory recoverable in a more efficient way, possibly giving us a marginal speed-up. This theory might not even be a bad one, but I don't have proof.
 
 // NOTE: AFAIK, the file system block size is a unit of work for the file system. File reads are done in blocks which are the size of the file system block size.
 // If the buffer isn't a multiple of the file system block size, we could end up reading way more data from the file than we need (1 extra block), even if we're just a couple of bytes
@@ -14,46 +14,43 @@
 
 // TODO: Technically, it would be optimal to just straight up read the block size from the OS, you would just have to implement it two times (Windows and Linux). Shouldn't be too hard though, consider doing it in the future.
 
-#define HISTORY_BUFFER_MAX_LINE_COUNT 63																				// Maximum num of lines storable in history buffer when using --context x flag. Note that the count of history buffer is HISTORY_BUFFER_MAX_LINE_COUNT + 1 because of circular buffer.
+#define HISTORY_BUFFER_MAX_LINE_COUNT 63															// Maximum num of lines storable in history buffer when using --context x flag. Note that the count of history buffer is HISTORY_BUFFER_MAX_LINE_COUNT + 1 because of circular buffer.
 
-// TODO: Make absolutely sure that I'm not including too much.
-
-#include <csignal>																										// Signalling and polling things.
+#include <csignal>																					// This block is for signalling and polling things.
 #ifndef PLATFORM_WINDOWS
 #include <sys/signalfd.h>
 #include <poll.h>
 #endif
 
 #ifdef PLATFORM_WINDOWS
-#define WIN32_LEAN_AND_MEAN																								// Include Windows.h to get access to the few winapi functions that we need, such as the ones for getting console input handle and setting ANSI escape code support.
+#define WIN32_LEAN_AND_MEAN																			// Include Windows.h to get access to the few winapi functions that we need, such as the ones for getting console handles and setting ANSI escape code support.
 #include <Windows.h>
 #endif
 
-#include <cstdlib>																										// Needed for realloc function.
+#include <cstdlib>																					// Needed for malloc, free and realloc functions.
 
 #ifdef PLATFORM_WINDOWS
-#include <io.h>																											// Needed for _isatty function.
-#define isatty(x) _isatty(x)																							// Renaming _isatty to isatty so it's the same as the function call in Linux.
+#include <io.h>																						// Needed for _isatty function.
+#define isatty(x) _isatty(x)																		// Renaming _isatty to isatty so it's the same as the function call in Linux.
 #define crossplatform_read(...) _read(__VA_ARGS__)
 #define crossplatform_write(...) _write(__VA_ARGS__)
 #else
-#include <unistd.h>																										// Linux isatty function is in here as well as some other useful stuff for this program as well I think.
+#include <unistd.h>																					// Linux isatty function is in here as well as some other useful stuff for this program as well I think.
 #define crossplatform_read(...) read(__VA_ARGS__)
 #define crossplatform_write(...) write(__VA_ARGS__)
 #endif
 
-#include <chrono>																										// For access to time durations for use with sleep_for().
-#include <thread>																										// For access to std::this_thread::sleep_for() and std::this_thread::yield().
+// TODO: Why do we need cstdio?
+#include <cstdio>																					// NOTE: Use "c___" headers instead of "____.h" headers whenever possible. The "c___" counterparts minimize global scope pollution by putting a lot of things in namespaces and replacing some #defines with functions. It's more "correct".
+#include <iostream>																					// For std::cout. We don't use std::cin or std::cerr because we handle both of those pathways through raw syscalls and custom buffering.
 
-#include <cstdio>																										// NOTE: Use "c___" headers instead of "____.h" headers whenever possible. The "c___" counterparts minimize global scope pollution by putting a lot of things in namespaces and replacing some #defines with functions. It's more "correct".
-#include <iostream>
-#include <cstring>
-#include <string>
-#include <regex>
+#include <cstring>																					// For some weird reason, std::memcpy is located inside this header file, which means we should include it. We also use std::strlen, which is also in this header. We might use a couple other things from here, not sure.
 
-#include <new>							// For std::nothrow.
+#include <regex>																					// For regex support. We don't currently do the regex parsing and searching ourselves. Perhaps that will be a future improvement.
 
-#ifdef PLATFORM_WINDOWS																									// These #defines are already defined in one of the Linux-only headers, but for Windows, we need to explicitly do it.
+#include <new>																						// For std::nothrow, which we use in "new (std::nothrow) x" statements to avoid exceptions.
+
+#ifdef PLATFORM_WINDOWS																				// These #defines are already defined in one of the Linux-only headers, but for Windows, we need to explicitly do it.
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
@@ -131,16 +128,16 @@ namespace color {
 
 // This function makes it easy to report errors. It handles the coloring for you, as well as the formatting of the error string.
 template <size_t N>
-void reportError(const char (&msg)[N]) {
+void reportError(const char (&msg)[N]) {																		// NOTE: The reason we don't just use the std::cerr output buffer to format our string, and then flush it after we're done formatting, is because that would presumably be slower than this setup.
 	if (isErrorColored) {
 		// Construct a buffer to hold the finished error message.
-		char buffer[static_strlen(color::red) + static_strlen("ERROR: ") + N - 1 + static_strlen(color::reset) + 1];							// NOTE: This code block is to create our own specific buffering for these substrings, to avoid syscalls and make the whole thing as efficient as possible.
+		char buffer[static_strlen(color::red) + static_strlen("ERROR: ") + N - 1 + static_strlen(color::reset) + 1];
 
 		// Copy in the ANSI code for red color.
-		std::memcpy(buffer, color::red, static_strlen(color::red));																		// NOTE: Technically, it would be more efficient to write "ERROR: " in every error message individually, but that probably means the executable is larger because of the extra .rodata data, which is undesirable.
+		std::memcpy(buffer, color::red, static_strlen(color::red));												// NOTE: Technically, it would be more efficient to write "ERROR: " in every error message individually, but that probably means the executable is larger because of the extra .rodata data, which is undesirable.
 
 		// Copy in the ERROR tag.
-		std::memcpy(buffer + static_strlen(color::red), "ERROR: ", static_strlen("ERROR: "));									// NOTE: memcpy is the C-style version of the function and std::memcpy is the C++-style version of the function. They're both literally the same function in every single way, but I'm going to use std because it's more "proper".
+		std::memcpy(buffer + static_strlen(color::red), "ERROR: ", static_strlen("ERROR: "));					// NOTE: memcpy is the C-style version of the function and std::memcpy is the C++-style version of the function. They're both literally the same function in every single way, but I'm going to use std because it's more "proper".
 
 		// Copy in the actual error message.
 		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: "), msg, N - 1);
@@ -152,64 +149,72 @@ void reportError(const char (&msg)[N]) {
 		buffer[static_strlen(color::red) + static_strlen("ERROR: ") + N - 1 + static_strlen(color::reset)] = '\n';
 
 		// Write the message to stdout.
-		crossplatform_write(STDERR_FILENO, buffer, sizeof(buffer));									// Don't buffer the output, we would technically have to if other buffered output would have happened till this point, but errors almost always happen before any buffered output, so this is safe.
-		// TODO: Write about how we don't have to catch any errors here.
+		crossplatform_write(STDERR_FILENO, buffer, sizeof(buffer));
+		// NOTE: We would technically have to buffer the error output if other buffered error output was present till this point (for temporal consistency). Since we only ever write unbuffered error output, this doesn't concern us.
+		// NOTE: It might be theoretically better to do buffered error output because buffered stdout output could have happened before this (to ensure temporal consistency with the stdout output, which should get outputted earlier than us), but I don't think this consistency matters, especially when error gets piped somewhere else.
+
+		// NOTE: No need to handle the errors that could happen here. First of all, we're already reporting an error, so we're exiting ASAP anyway. Second of all, if error reporting throws an error, how are we supposed to report that anyway? Doing nothing here is the most efficient at no real cost to the experience.
 		return;
 	}
+
 	// Uncolored version of the error message generation.
 	char buffer[static_strlen("ERROR: ") + N - 1 + 1];
+
 	std::memcpy(buffer, "ERROR: ", static_strlen("ERROR: "));
+
 	std::memcpy(buffer + static_strlen("ERROR: "), msg, N - 1);
+
 	buffer[static_strlen("ERROR: ") + N - 1] = '\n';
-	crossplatform_write(STDERR_FILENO, buffer, sizeof(buffer));					// TODO: Why does intellisense want something from me here?
+
+	crossplatform_write(STDERR_FILENO, buffer, sizeof(buffer));									// NOTE: Intellisense is complaining about this line, even though PVS-Studio has nothing against it. I can't find any issue either, so I'm just going to leave it like this.
 }
 
-void reportRegexError(const char* msg) {				// TODO: Finish writing this function for regex error reporting.
+// Another version of the above function specifically for handling regex errors. This is necessary because the length of the regex errors isn't known at compile-time.
+void reportRegexError(const char* msg) {
 	size_t msgLength = std::strlen(msg);
 
 	if (isErrorColored) {
-		// Construct a buffer to hold the finished error message.
-		size_t bufferSize = static_strlen(color::red) + static_strlen("ERROR: regex error: ") + msgLength + static_strlen(color::reset) + 1;							// NOTE: This code block is to create our own specific buffering for these substrings, to avoid syscalls and make the whole thing as efficient as possible.
+		size_t bufferSize = static_strlen(color::red) + static_strlen("ERROR: regex error: ") + msgLength + static_strlen(color::reset) + 1;
 		char* buffer = new char[bufferSize];
 
-		// Copy in the ANSI code for red color.
-		std::memcpy(buffer, color::red, static_strlen(color::red));																		// NOTE: Technically, it would be more efficient to write "ERROR: " in every error message individually, but that probably means the executable is larger because of the extra .rodata data, which is undesirable.
+		std::memcpy(buffer, color::red, static_strlen(color::red));
 
-		// Copy in the ERROR tag.
-		std::memcpy(buffer + static_strlen(color::red), "ERROR: regex error: ", static_strlen("ERROR: regex error: "));									// NOTE: memcpy definition exists because Visual Studio puts in an extra header file that lets it be available implicitly. AFAIK, if you want cross-platform and cross-compiler support, you have to use std::memcpy.
+		std::memcpy(buffer + static_strlen(color::red), "ERROR: regex error: ", static_strlen("ERROR: regex error: "));
 
-		// Copy in the actual error message.
 		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: regex error: "), msg, msgLength);
 
-		// Copy in the ANSI code for color reset.
 		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: regex error: ") + msgLength, color::reset, static_strlen(color::reset));
 
-		// Add a newline to the end of the message.
 		buffer[static_strlen(color::red) + static_strlen("ERROR: regex error: ") + msgLength + static_strlen(color::reset)] = '\n';
 
-		// Write the message to stdout.
-		crossplatform_write(STDERR_FILENO, buffer, bufferSize);									// Don't buffer the output, we would technically have to if other buffered output would have happened till this point, but errors almost always happen before any buffered output, so this is safe.
-		// TODO: Write about how we don't have to catch any errors here.
+		crossplatform_write(STDERR_FILENO, buffer, bufferSize);
 
 		delete[] buffer;
 		return;
 	}
+
 	// Uncolored version of the error message generation.
 	size_t bufferSize = static_strlen("ERROR: regex error: ") + msgLength + 1;
 	char* buffer = new char[bufferSize];
-	std::memcpy(buffer, "ERROR: regex error: ", static_strlen("ERROR: regex error: "));				// TODO: What's wrong here?
+
+	std::memcpy(buffer, "ERROR: regex error: ", static_strlen("ERROR: regex error: "));				// NOTE: Intellisense doesn't appreciate this line, but PVS-Studio doesn't have anything against it and I can't see any errors, so I'm leaving it like this.
+
 	std::memcpy(buffer + static_strlen("ERROR: regex error: "), msg, msgLength);
+
 	buffer[static_strlen("ERROR: regex error: ") + msgLength] = '\n';
+
 	crossplatform_write(STDERR_FILENO, buffer, bufferSize);
+
 	delete[] buffer;
 }
 
+// Signal handling.
 #ifdef PLATFORM_WINDOWS																// Only needed on Windows because we signal for the main loop to stop in Linux via artifical EOF signal.
 bool shouldLoopRun = true;
 void signalHandler(int signum) { shouldLoopRun = false; }							// NOTE: SIGINT exists on Windows, but SIGTERM doesn't. SIGTERM is replaced by SIGBREAK on Windows. Also, SIGINT signal handler gets run on a separate thread, unlike the signal handlers for all the other signals. Why? I have no idea.
 #endif
 
-// Collection of flags. These correspond to command-line flags you can set for the program.
+// Collection of flags. These correspond to a subset of the command-line flags you can set for the program. The other flags that aren't in the following namespace are handled differently and don't need any global variables.
 namespace flags {
 	bool caseSensitive = false;
 	bool allLines = false;
@@ -219,16 +224,25 @@ namespace flags {
 	bool only_line_nums = false;
 }
 
-// Keeps track of the current line so a variety of helper functions can do things with it.
+// Keeps track of the current line number.
 size_t lineCounter = 1;
 
-class VectorString {							// TODO: This is essentially a replacement for the std::string class for this program. Before you keep working on this, you should probably get the other code ready to accept the new class.
+// This class is a replacement for std::string. We use it because it has (AFAIK) more efficient character addition functions.
+class VectorString {
 public:
 	char* buffer;
 	size_t bufferSize = VECTOR_STRING_BUFFER_START_SIZE;
-	size_t bufferWriteHead = 0;
+	size_t bufferWriteHead = 0;						// TODO: Change buffer to data and rework the variable naming a little. Also, redo the defines at the top of the file if necessary and check other names that need to be checked as well.
 
-	VectorString() { buffer = new char[VECTOR_STRING_BUFFER_START_SIZE]; }
+	// Initialize the VectorString. This consists solely of allocating space on the heap for the data array.
+	bool init() {
+		buffer = (char*)malloc(VECTOR_STRING_BUFFER_START_SIZE);						// SUPER-IMPORTANT-NOTE: We are forced to use malloc here since we use realloc in the following bit of code. Mixing C-style and C++-style allocations is UB (data structures and/or the heap location could be different, etc...). This is the only way.
+		if (!buffer) {
+			reportError("failed to allocate a vector string buffer");
+			return false;
+		}
+		return true;
+	}
 
 	bool enoughSpaceForAddition(size_t additionSize) { return bufferSize - bufferWriteHead >= additionSize; }
 
@@ -253,33 +267,31 @@ public:
 	// EXTRA: If you don't know whether your scaling the block up or down, free/malloc, because of the speed data given above this makes the most sense in these situations.
 
 	bool allocateMoreSpace() {
-		size_t newSize = bufferSize + VECTOR_STRING_BUFFER_STEP_SIZE;					// TODO: Is it better to use the extra variable or not?
-		if (newSize > VECTOR_STRING_BUFFER_MAX_SIZE) { return false; }
-		char* tempBuffer = (char*)realloc(buffer, newSize);										// NOTE: Use realloc because we want to keep the data in the VectorString.
-		if (tempBuffer) { bufferSize = newSize; buffer = tempBuffer; return true; }
+		if (bufferSize == VECTOR_STRING_BUFFER_MAX_SIZE) { return false; }								// NOTE: This comparison is possible because VECTOR_STRING_BUFFER_MAX_SIZE should always be a multiple of VECTOR_STRING_BUFFER_STEP_SIZE.
+		bufferSize += VECTOR_STRING_BUFFER_STEP_SIZE;
+		char* tempBuffer = (char*)realloc(buffer, bufferSize);											// NOTE: Use realloc because we want to keep the data in the VectorString.
+		if (tempBuffer) { buffer = tempBuffer; return true; }
+		bufferSize -= VECTOR_STRING_BUFFER_STEP_SIZE;
 		return false;
 	}
 
-	// NOTE: The following usages of enoughSpaceForAddition() technically are inefficient, because you could add to bufferWriteHead and check if it goes past bounds before using it, which would be better.
-	// It would be better because the rate of success of the enoughSpaceForAddition() functions is far above 50%, which means optimizing for that case is better.
-	// This would prevent us from putting the code in a function though, which would make the code look worse.
-	// I'm going to leave the optimization out in the hope that the compiler will optimize this for me, since it's very simple and should be pretty easy for it to understand.
+	// The following functions all add characters to the VectorString. There are so many because depending on the amount you want to add, there are different optimal methods.
 
 	bool operator+=(const char& character) {
-		if (enoughSpaceForAddition(sizeof(character))) { buffer[bufferWriteHead] = character; bufferWriteHead++; return true; }
-		if (allocateMoreSpace()) { buffer[bufferWriteHead] = character; bufferWriteHead++; return true; }
+		if (enoughSpaceForAddition(sizeof(character))) { addition: buffer[bufferWriteHead] = character; bufferWriteHead++; return true; }
+		if (allocateMoreSpace()) { goto addition; }
 		return false;
 	}
 
 	bool operator+=(const uint16_t& characters) {
-		if (enoughSpaceForAddition(sizeof(characters))) { *(uint16_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
-		if (allocateMoreSpace()) { *(uint16_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (enoughSpaceForAddition(sizeof(characters))) { addition: *(uint16_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (allocateMoreSpace()) { goto addition; }
 		return false;
 	}
 
 	bool operator+=(const uint32_t& characters) {
-		if (enoughSpaceForAddition(sizeof(characters))) { *(uint32_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
-		if (allocateMoreSpace()) { *(uint32_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (enoughSpaceForAddition(sizeof(characters))) { addition: *(uint32_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (allocateMoreSpace()) { goto addition; }
 		return false;
 	}
 
@@ -344,9 +356,11 @@ public:
 
 	void clear() { bufferWriteHead = 0; }
 
-	~VectorString() { delete[] buffer; }
+	void release() { delete[] buffer; }																	// NOTE: delete and delete[] can throw exceptions, but only if the destructors of the objects in question throw exceptions (which isn't encouraged). In this situation, since the object in question is char, this never throws exceptions.
 };
 
+// Keeps track of previous lines that didn't contain any matches. Very useful for operation with the --context flag but also keeps track of the one and only current line when in normal operation (for efficiency).
+// Implemented as a circular buffer.
 class HistoryBuffer {
 	static unsigned int buffer_len;
 	static unsigned int beginIndex;
@@ -361,11 +375,21 @@ public:
 
 	static void purgeAmountFilled() { amountFilled = 0; }
 
+	// Initialize HistoryBuffer. We do this by initializing all the necessary VectorStrings after allocating them. If one initialization fails, we release all the initializations we've done so far, free memory, and exit the program.
+	// We can exit directly from this function because no other memory needs disposing of at this point.
 	static void init() {
 		buffer_len = buffer_lastIndex + 1;
 		buffer = new VectorString[buffer_len];
+		for (unsigned int i = 0; i < buffer_len; i++) {
+			if (!buffer[i].init()) {
+				for (unsigned int j = 0; j < i; j++) { buffer[j].release(); }
+				delete[] buffer;
+				exit(EXIT_FAILURE);														// NOTE: We use EXIT_FAILURE here because this isn't directly the user's fault. This error happens when too little memory is available on the system, so it's an environment problem. We denote those with EXIT_FAILURE.
+			}
+		}
 	}
 
+	// Push the current line onto the historical partition of the history buffer.
 	static void push() {
 		if (index == beginIndex - 1) {
 			if (beginIndex == buffer_lastIndex) { index++; beginIndex = 0; return; }
@@ -377,11 +401,15 @@ public:
 
 	static void pushWithAmountInc() { push(); if (amountFilled != buffer_lastIndex) { amountFilled++; } }
 
+	// Clear the history buffer.
 	static void purge() { index = beginIndex; }
 
+	// Purge while also resetting amountFilled.
 	static void purgeWithAmountSet() { purge(); purgeAmountFilled(); }
 
-	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout.write(buffer[beginIndex].buffer, buffer[beginIndex].bufferWriteHead) << '\n'; } }			// NOTE: It is important to use '\n' instead of std::endl because std::endl puts a newline into the stream but also flushes it, which is a syscall, which is super slow. '\n' doesn't flush, so faster.
+	// Print all the lines in the historical partition of the HistoryBuffer to the console.
+	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout.write(buffer[beginIndex].buffer, buffer[beginIndex].bufferWriteHead) << '\n'; } }
+	// NOTE: It is important to use '\n' instead of std::endl because std::endl puts a newline into the stream but also flushes it, which is a syscall, which is super slow. '\n' doesn't flush, so faster.
 
 	// NOTE: We could store the amount filled and edit the variable with every call to push(), but I doubt that would be efficient since push is called so many more times than print is (at least normally).
 	// Doing that would cause amountFilled to be added to over and over with little return on the investment. That's why we're just calculating amountFilled every time we need it, that way push() doesn't have to waste it's time incrementing anything.
@@ -405,7 +433,8 @@ public:
 
 	static bool peekSafestLineNum(size_t& safestNum) { if (amountFilled == buffer_lastIndex) { safestNum = lineCounter - buffer_lastIndex; return true; } return false; }
 
-	static void release() { delete[] buffer; }
+	// Release all the VectorStrings before freeing the memory in which they reside.
+	static void release() { for (unsigned int i = 0; i < buffer_len; i++) { buffer[i].release(); } delete[] buffer; }			// TODO: Make sure this is getting release everywhere where it's supposed to.
 };
 
 VectorString* HistoryBuffer::buffer;
@@ -461,10 +490,11 @@ unsigned int parseUInt(char* string) {
 	exit(EXIT_SUCCESS);
 }
 
-void showHelp() { std::cout << helpText; }				// NOTE: I have previously only shown help when output is connected to TTY, so as not to pollute stdout when piping. Back then, help was shown sometimes when it wasn't requested, which made it prudent to include that feature. Now, you have to explicitly ask for help, making this TTY branching unnecessary.
+// NOTE: I have previously only shown help when output is connected to TTY, so as not to pollute stdout when piping. Back then, help was shown sometimes when it wasn't requested, which made it prudent to include that feature. Now, you have to explicitly ask for help, making TTY branching unnecessary.
+void showHelp() { std::cout << helpText; }
 
 bool forcedOutputColoring;
-bool forcedErrorColoring;// NOTE: GARANTEE: If something goes wrong while parsing the cmdline args and an error message is necessary, the error message will always be printed with the default error coloring (based on TTY/piped mode).
+bool forcedErrorColoring;								// NOTE: GARANTEE: If something goes wrong while parsing the cmdline args and an error message is necessary, the error message will always be printed with the default error coloring (based on TTY/piped mode).
 
 // Parse flags at the argument level. Calls parseFlagGroup if it encounters flag groups and handles word flags (those with -- in front) separately.
 unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you write --context twice or --stdout-color or --stderr-color twice (or any additional flags that we may add), the value supplied to the rightmost instance will be the value that is used. Does not throw an error.
@@ -482,7 +512,7 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 						exit(EXIT_SUCCESS);
 					}
 					HistoryBuffer::buffer_lastIndex = parseUInt(argv[i]);
-					if (HistoryBuffer::buffer_lastIndex == 0) { continue; }															// Context value 0 is the same as no context, so don't bother setting context up.
+					if (HistoryBuffer::buffer_lastIndex == 0) { continue; }															// Context value 0 is the same as no context, so don't bother with doing any context calculations while in the main loops.
 					flags::context = true;
 					continue;
 				}
@@ -539,7 +569,7 @@ void manageArgs(int argc, char** argv) {
 		reportError("too few arguments");
 		exit(EXIT_SUCCESS);
 	case 1:
-		{																												// Unnamed namespace because we can't create variables inside switch cases otherwise.
+		{																											// Unnamed namespace because we can't create variables inside switch cases otherwise.
 			std::regex_constants::syntax_option_type regexFlags = std::regex_constants::grep | std::regex_constants::nosubs | std::regex_constants::optimize;
 			if (!flags::caseSensitive) { regexFlags |= std::regex_constants::icase; }
 			try { keyphraseRegex = std::regex(argv[keyphraseArgIndex], regexFlags); }								// Parse regex keyphrase.
@@ -549,12 +579,12 @@ void manageArgs(int argc, char** argv) {
 			}
 
 			bool previousColoring = isOutputColored;
-			isOutputColored = forcedOutputColoring;																		// If everything went great with parsing the cmdline args, finally set output coloring to what the user wants it to be. It is necessary to do this here because of the garantee that we wrote above.
-			forcedOutputColoring = previousColoring;
+			isOutputColored = forcedOutputColoring;																	// If everything went great with parsing the cmdline args, finally set output coloring to what the user wants it to be. It is necessary to do this here because of the garantee that we wrote above.
+			forcedOutputColoring = previousColoring;																// We repurpose forcedOutputColoring to indicate if there is a tty connected to stdout. This is helpful to some later parts of the code.
 
-			previousColoring = isErrorColored;
+			previousColoring = isErrorColored;																		// Same deal as above, but with stderr.
 			isErrorColored = forcedErrorColoring;
-			forcedErrorColoring = previousColoring;				// TODO: This code block isn't strictly necessary, so you should probably remove it.
+			forcedErrorColoring = previousColoring;
 		}
 		return;
 	default:																										// If more than 1 non-flag argument exists (includes flags after first non-flag arg), throw error.
@@ -563,33 +593,29 @@ void manageArgs(int argc, char** argv) {
 	}
 }
 
+// The following typedef exists on Linux, but not on Windows, so we create it here.
 #ifdef PLATFORM_WINDOWS
-typedef int ssize_t;					// TODO: Make sure this syntax is correct.
+typedef int ssize_t;
 #endif
 
-// Handles input in a buffered way.
+// Handles input in a buffered, cross-platform way.
 class InputStream {
-/*#ifdef PLATFORM_WINDOWS
-public:
-	static void init() { }															// Unsynchronize C++ input buffer with C input buffer. This often makes things faster because implementors often don't bother buffering input until this is set to false (where they can then safely buffer input).
-#else*/
-
 #ifndef PLATFORM_WINDOWS
 	static pollfd fds[2];																							// File descriptors to poll. One for stdin and one for a signal fd.
 	static sigset_t sigmask;																						// Signals to handle with poll.
 #endif
 
 	static char* buffer;
-	static size_t bufferSize;					// TODO: There is no real reason why this should be size_t instead of ssize_t is there? Check linux version as well. If ssize_t is used for indexes and reading, the buffer can't ever grow past that anyway, so why not use ssize_t here as well.
+	static ssize_t bufferSize;
 
 	static ssize_t bytesRead;																						// Position of read head in buffer.
 	static ssize_t bytesReceived;																					// Position of write head in buffer.
 
-	static bool isReadPositionUnaligned;
+	static bool isReadPositionUnaligned;																			// Flag signals when the current read position is not on an 8-byte boundary.
 
 public:
 	static void init() {
-		buffer = new char[INPUT_STREAM_BUFFER_START_SIZE];																				// Initialize buffer with the starting amount of RAM space.
+		buffer = new char[INPUT_STREAM_BUFFER_START_SIZE];															// Initialize buffer with the starting amount of memory.
 		
 #ifndef PLATFORM_WINDOWS
 		// Add SIGINT and SIGTERM to set of tracked signals.
@@ -615,7 +641,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 	// NOTE: That would probably be faster since the standard is optimized for each platform. I'm too proud of my mechanism to remove it right now, so I'm leaving it in for the forseeable future.
 	// NOTE: Plus, I haven't done any benchmarks. Maybe this is faster than the standard because the standard might do a bunch of safety checks and unnecessary stuff.
 
-	static bool refillBuffer() {
+	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
+	static bool refillBuffer() {			// TODO: Check for memory leaks with visual studio after going through the code.
 #ifndef PLATFORM_WINDOWS
 		// When no more data left in buffer, try get more.
 		if (poll(fds, 2, -1) == -1) {																				// Block until we either get some input on stdin or get either a SIGINT or a SIGTERM.
@@ -626,27 +653,26 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		if (fds[1].revents) { return false; }																		// Signal EOF if we caught a signal.
 #endif
 
-		bytesReceived = crossplatform_read(STDIN_FILENO, buffer, bufferSize);														// Read as much as we can fit into the buffer.
+		bytesReceived = crossplatform_read(STDIN_FILENO, buffer, bufferSize);										// Read as much as we can fit into the buffer.
 
 		if (bytesReceived == 0) { return false; }																	// In case of actual EOF, signal EOF.
 		if (bytesReceived == -1) {																					// In case of error, log and signal EOF.
 			reportError("failed to read from stdin");
 			return false;
-
 		}
 		bytesRead = 0;																								// If new data is read, the read head needs to be reset to the beginning of the buffer.
 
-		// TODO: The below comparison gives warnings on gcc. Makes sense, can we stop comparing two different types here?
 		if (bytesReceived == bufferSize) {																			// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
-			size_t newBufferSize = bufferSize + INPUT_STREAM_BUFFER_SIZE_STEP;					// TODO: There is probably a way to avoid doing this addition when the buffer is at it's max. You need to do some macro magic with divisions and floors to find the exact value you need to stop at in compile-time.
-			if (newBufferSize <= INPUT_STREAM_BUFFER_MAX_SIZE) {
-				delete[] buffer;																// Delete current allocation to make room for the reallocation.
-				buffer = new (std::nothrow) char[newBufferSize];								// Try to allocate new block with increased size.
-				if (buffer) { bufferSize = newBufferSize; }
-				else {																			// If we fail, try to allocate the old black again in order to get back to how things were.
+			if (bufferSize == INPUT_STREAM_BUFFER_MAX_SIZE) {														// NOTE: This comparison is only possible because INPUT_STREAM_BUFFER_MAX_SIZE is a multiple of INPUT_STREAM_BUFFER_SIZE_STEP.
+				delete[] buffer;																					// Delete current allocation to make room for the reallocation.
+				bufferSize += INPUT_STREAM_BUFFER_SIZE_STEP;
+				buffer = new (std::nothrow) char[bufferSize];														// Try to allocate new block with increased size.
+				if (!buffer) {																						// If we fail, try to allocate the old block again in order to get back to how things were.
+					bufferSize -= INPUT_STREAM_BUFFER_SIZE_STEP;
 					buffer = new (std::nothrow) char[bufferSize];								// NOTE: Because of the way this works, if the heap doesn't have any memory left, every call to refillBuffer from then on will have some extra overhead. INPUT_STREAM_BUFFER_MAX_SIZE should prevent this though, so no big deal.
-					if (!buffer) {																// If that fails and somehow the heap doesn't have any storage left even though it did a moment ago, throw an error.
-						reportError("reallocation of freed buffer memory failed, heap space snatched away by an unknown entity");			// NOTE: This error shouldn't ever happen theoretically, but I'm leaving it in in case some part of stdlib on a different thread or a debugger decides to change the heap while we're in the middle of reallocating.
+					if (!buffer) {																					// If that fails and somehow the heap doesn't have any storage left even though it did a moment ago, throw an error.
+						// NOTE: This error shouldn't ever happen theoretically, but I'm leaving it in in case some part of stdlib on a different thread or a debugger decides to change the heap while we're in the middle of reallocating.
+						reportError("reallocation of freed buffer memory failed, heap space snatched away by an unknown entity");
 						return false;
 					}
 				}
@@ -658,26 +684,15 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
 	static bool readLine(VectorString& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
-#ifdef REMOVE_THE_FOLLOWING_CODE
-		if (std::getline(std::cin, line)) { return true; }															// Get line. Technically, eofbit gets set if EOF terminates the line, but we don't worry about that because in that case we have to return true as well.
-		// NOTE: Technically, one could put the below line above std::getline, but that would do an unnecessary branch for every readLine in the file. This way, the branch is only tested when it has to be, which induces small overhead at EOF but saves a bunch of overhead in the loops.
-		// NOTE: More importantly, that only works if you assume that the last line of the file ends with EOF, but it might end in newline, in which case this is the better way to do it because it doesn't print an extra line at the bottom of the output.
-		if (std::cin.eof()) { return false; }																		// If getline fails because we're trying to read at the EOF position (in which case eofbit will be set), return false without doing error reporting.
-			// Otherwise, some error occurred and we need to report it and return false.
-		reportError("failed to read from stdin");
-		
-		return false;
-
-#else
-
 		// NOTE: We could implement transfers that are more than one byte wide in this alignment code like we did in the transfer code that comes after, but that would be a lot of work and produce a lot of code.
 		// TODO: There might be a way to implement it that I haven't thought of, but as it stands, I'm leaving it as a future improvement.
 		if (isReadPositionUnaligned) {
-			for (; bytesRead < bytesRead + 8 - (bytesRead % 8) - 1 && bytesRead < bytesReceived; bytesRead++) {							// TODO: The limiting clause could probably be made more efficient with some bit twiddling. Research that.
+			ssize_t limiter = bytesRead + 8 - (bytesRead % 8) - 1;													// TODO: Research if there is a more efficient way to do this. There is probably some fancy bit twiddling thing I could do here.
+			for (; bytesRead < limiter && bytesRead < bytesReceived; bytesRead++) {
 				if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
 				if (!(line += buffer[bytesRead])) { return false; }
 			}
-			if (bytesRead >= bytesReceived) { if (!refillBuffer()) { return false; } }
+			if (bytesRead == bytesReceived) { if (!refillBuffer()) { return false; } }
 			if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = false; return true; }
 			if (!(line += buffer[bytesRead])) { return false; }
 			bytesRead++;
@@ -688,7 +703,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		// You would have to copy chunks of data around when resizing the InputStream, since we don't want those to get lost while doing that, but since the InputStream doesn't resize often in the grand scheme of things,
 		// it should actually be more efficient, with less overhead. It would be a major redesign and I don't want to do that right now, I'm leaving it as a future improvement.
 
-		while (true) {
+		while (true) {														// NOTE: I could check for shouldLoopRun here, but it would only make sense for lines that are incredibly super duper mega long, which none really are. Doing a comparison here would probably bring more harm than good IMO.
 			for (; bytesRead < bytesReceived; bytesRead += 8) {														// Read all the data in the buffer.
 				if (buffer[bytesRead + 0] == '\n') { bytesRead++; isReadPositionUnaligned = true; return true; }
 				if (buffer[bytesRead + 1] == '\n') { if (!(line += buffer[bytesRead])) { return false; } bytesRead += 2; isReadPositionUnaligned = true; return true; }
@@ -703,44 +718,27 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			if (refillBuffer()) { continue; }																		// If we never encounter the end of the line in the current buffer, fetch more data.
 			return false;																							// If something went wrong while refilling buffer, return false.
 		}
-#endif
 	}
 
-	static bool discardLine() {																						// Reads the next line but doesn't store it anywhere since we're only reading it to advance the read position. Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF, SIGINT, SIGTERM or error on Linux.
-#ifdef REMOVE_THE_FOLLOWING_CODE
-		char character;
-		while (true) {																								// Not going to check for shouldLoopRun here because interrupting inside of a line isn't something that readLine offers either and because console is line-buffered anyway, so it wouldn't actually enable signalling while input is pending.
-			character = std::cin.get();																				// Processing characters once they've been submitted by user is super fast, so the check would be pretty much unnecessary unless the lines are super super super long, which doesn't happen often.
-			if (character == EOF) { return false; }																	// Even if the lines are long, all you'll have to do is press Ctrl+C and wait for the line to be over for grep to quit. This is all so unlikely, that I'm not going to waste a branch checking for it.
-			if (std::cin.fail()) {
-				reportError("failed to read from stdin");
-				return false;
-			}
-			if (character == '\n') { return true; }
-		}
-#else
+	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
+	static bool discardLine() {																	// Reads the next line but doesn't store it anywhere since we're only reading it to advance the read position. Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF, SIGINT, SIGTERM or error on Linux.
 		while (true) {
-			for ( ; bytesRead < bytesReceived; bytesRead++) { if (buffer[bytesRead] == '\n') { bytesRead += 1; return true; } }						// Read all the data in current buffer and exit as soon as we've discarded an entire line.
+			for ( ; bytesRead < bytesReceived; bytesRead++) { if (buffer[bytesRead] == '\n') { bytesRead += 1; return true; } }						// Start reading all the data in current buffer and exit as soon as we've discarded an entire line.
 			if (refillBuffer()) { continue; }
 			return false;
 		}
-#endif
 	}
 
 	static void release() { delete[] buffer; }
 };
 
-// SUPER IMPORTANT TODO: Why are we not using the same buffering mechanism for windows as for Linux? Something to do with EOF's, but I don't think we understand all the stuff properly when we built this. The whole InputStream class could be improved. Do that.
-// FOLLOWUP: Yeah, I don't think we understood properly at the time of writing the current system. Yes, we don't really have a way to let SIGINT and such interrupt our read calls, but we don't have to rely on std::cin buffering system, which might not be optimal since it doesn't expand as much as ours.
-// There is no reason why we should use the same buffering system that we have for linux for the windows version.
-
-#ifndef PLATFORM_WINDOWS																							// Static members variables only need to be initialized in Linux because we don't have any in Windows.
+#ifndef PLATFORM_WINDOWS																							// Signalling and polling related static member variables only need to be initialized in Linux because we don't use them in Windows.
 pollfd InputStream::fds[] = { STDIN_FILENO, POLLIN, 0, 0, POLLIN, 0 };												// Parts of this data get changed later in runtime.
 sigset_t InputStream::sigmask;
 #endif
 
 char* InputStream::buffer;
-size_t InputStream::bufferSize = INPUT_STREAM_BUFFER_START_SIZE;
+ssize_t InputStream::bufferSize = INPUT_STREAM_BUFFER_START_SIZE;
 
 ssize_t InputStream::bytesRead = 0;
 ssize_t InputStream::bytesReceived = 0;
@@ -755,7 +753,7 @@ std::cmatch matchData;
 ptrdiff_t matchSuffixIndex;
 
 void highlightMatches() {																							// I assume this will be inlined. Probably not in debug mode, but almost definitely in release mode.
-	matchSuffixIndex = 0;				// NOTE: Technically, unrolling the first iteration of the below loop would allow us to skip the overhead of initializing this variable to 0, but the compiler probably does it for us.
+	matchSuffixIndex = 0;				// NOTE: Technically, unrolling the first iteration of the below loop would allow us to skip the overhead of initializing this variable to 0 and the overhead of the following additions, but the compiler probably does it for us.
 	const char* stringBufferEnd = CURRENT_LINE_ALIAS.buffer + CURRENT_LINE_ALIAS.bufferWriteHead;
 	do {
 		ptrdiff_t newMatchPosition = matchData.position();
@@ -781,62 +779,55 @@ void highlightMatches() {																							// I assume this will be inlined
 #define MAIN_WHILE InputStream::init(); while (true)
 #endif
 
+// NOTE: As per the standard, you can use function-style macros while leaving one or more or all of the parameters blank. They just won't be filled with anything and you'll have empty spots, which is exactly the behaviour we want here, so everythings fine.
+
 #define LINE_WHILE_START MAIN_WHILE { if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { break; }
-#ifdef REMOVE_THIS_CODE_AFTER_MOVING_COMMENT_SOMEWHERE_ELSE
-#define LINE_WHILE_END(cleanupCode) } cleanupCode; HistoryBuffer::release(); return 0;								// NOTE: As per the standard, you can use function-style macros while leaving one or more or all of the parameters blank. They just won't be filled with anything and you'll have empty spots, which is exactly the behaviour we want here, so everythings fine.
-#else
 #define LINE_WHILE_END(cleanupCode) CURRENT_LINE_ALIAS.clear(); } cleanupCode; InputStream::release(); HistoryBuffer::release(); return 0;
-#endif
 
 #define COLORED_RED_ONLY_LINE_WHILE_START std::cout << color::red; LINE_WHILE_START
 #define COLORED_RED_ONLY_LINE_WHILE_END() LINE_WHILE_END(std::cout << color::reset)
 
-#ifdef PLATFORM_WINDOWS
-#define LINE_WHILE_CONTINUE continue;
-#else
 #define LINE_WHILE_CONTINUE CURRENT_LINE_ALIAS.clear(); continue;
-#endif
 
 #ifdef PLATFORM_WINDOWS
 #define INNER_WINDOWS_SIGNAL_CHECK_START if (shouldLoopRun) {
-#define INNER_WINDOWS_SIGNAL_CHECK_END } else { HistoryBuffer::release(); return 0; }
+#define INNER_WINDOWS_SIGNAL_CHECK_END } else { InputStream::release(); HistoryBuffer::release(); return 0; }														// NOTE: It might seem better to break out of main loop here, but the things we are doing here instead are more efficient. It isn't a bug.
 #else
 #define INNER_WINDOWS_SIGNAL_CHECK_START
 #define INNER_WINDOWS_SIGNAL_CHECK_END
 #endif
 
-#ifdef PLATFORM_WINDOWS
-#define INNER_INPUT_STREAM_READ_LINE if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { HistoryBuffer::release(); return 0; }
-#define INNER_INPUT_STREAM_DISCARD_LINE if (!InputStream::discardLine()) { HistoryBuffer::release(); return 0; }
-#else
-#define INNER_INPUT_STREAM_READ_LINE if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { InputStream::release(); HistoryBuffer::release(); return 0; }
+#define INNER_INPUT_STREAM_READ_LINE if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { InputStream::release(); HistoryBuffer::release(); return 0; }				// NOTE: This code also doesn't break out of the main loop on purpose, even though that would work. This method is more efficient.
 #define INNER_INPUT_STREAM_DISCARD_LINE if (!InputStream::discardLine()) { InputStream::release(); HistoryBuffer::release(); return 0; }
-#endif
 
-// NOTE: I'm not going to put any error handling on allocation fails because that shouldn't actually happen unless there is something wrong with the OS. If it does happen, an abort will be triggered and my program will quit, leaving the OS to clean up all of it's resources, which isn't good practice, but like I said, this shouldn't happen and putting in error handling
-// NOTE: would be kind of awkward in some places. It would even force me to use exceptions as far as I can see (at the copying of one std::string into another), which I don't want to do.
-// NOTE: There is one place where a large enough file would cause memory issues (std::string copying in HistoryBuffer), but I just assume that the user won't put in a huge huge huge file consisting of only one line into a grep program, what would be the use? If he does, then it's his fault and we'll just let the OS clean up, I don't really have a problem with that in that case.
-// NOTE: Plus, like I said, it lets me avoid exception handling.
+#define WRITE_LINE_SUFFIX std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex)
+
+// NOTE: I don't handle potential errors for some of the small allocations because your system would need to be super super low on resources for the errors to get thrown, which shouldn't happen normally.
+// If your system is super super low on resources and you run this program, it's kind of your own fault is it not?
+// TODO: Go through the program and make sure that this way of thinking won't bite you in your backside. Why not handle the errors, it's not going to hurt anyone? Really consider doing it.
 
 // TODO: Learn about SFINAE and std::enable_if.
 
 // Program entry point
 int main(int argc, char** argv) {
-	std::cout.sync_with_stdio(false);		// Unsynchronize C++ output buffer with C output buffer. Normally set to true to avoid output getting mixed around when mixing C++ and C function calls in source code. Setting to false yields performance improvements for same reason as doing this for input buffers above.
-											// IMPORTANT: As a result of doing this unsync stuff, we have to choose either C or C++ style buffered output and stick with it for the whole program. It is still possible to use C-style input and C++-style output at same time, the limitation only applies within the boundaries of input and output.
+	// Unsynchronize C++ output buffer with C output buffer. Normally set to true to avoid output getting mixed around when mixing C++ and C function calls in source code. Setting to false yields performance improvements because often-times, implementors of the stdlib don't bother implementing buffering until this is set to false
+	// (because it's easier to implement for them like that), or so I've heard at least, there might be other reasons for this as well.
+	// IMPORTANT: As a result of doing this unsync stuff, we have to choose either C or C++ style buffered output and stick with it for the whole program. It is still possible to use C-style input and C++-style output at same time, the limitation only applies within the boundaries of input and output respectively.
+	std::cout.sync_with_stdio(false);
+
 #ifdef PLATFORM_WINDOWS
 	signal(SIGINT, signalHandler);			// Handling error here doesn't do any good because program should continue to operate regardless.
 	signal(SIGTERM, signalHandler);			// Reacting to errors here might poison stdout for programs on other ends of pipes, so just leave this be.
 #endif
 
-	// Only enable colors if stdout is a TTY to make reading piped output easier for other programs.
+	// Only enable output colors if stdout is a TTY to make reading piped output easier for other programs.
 	if (isatty(STDOUT_FILENO)) {
 #ifdef PLATFORM_WINDOWS						// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
 		HANDLE consoleOutputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { goto ANSISetupFailure; }						// If ANSI setup fails, just revert back to not coloring the output, so the user can at least see the output, even if it won't be colored.
-		DWORD mode;																												// NOTE: Because of the way this code plays with the rest of the code, the rest of the program will think that the output is being piped to something instead of being attached to a console, but that doesn't matter in this case.
-		if (!GetConsoleMode(consoleOutputHandle, &mode)) { goto ANSISetupFailure; }
-		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { goto ANSISetupFailure; }
+		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { goto ANSIOutputSetupFailure; }		// If ANSI setup fails, just revert back to not coloring the output, so the user can at least see the output, even if it won't be colored.
+		DWORD mode;																					// IMPORTANT-NOTE: Because of the way this code plays with the rest of the code, the rest of the program will think that the output is being piped to something instead of being attached to a console, but that doesn't matter in this case.
+		if (!GetConsoleMode(consoleOutputHandle, &mode)) { goto ANSIOutputSetupFailure; }
+		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { goto ANSIOutputSetupFailure; }
 #endif
 
 		// NOTE: Technically, it would be more efficient to place the above virtual terminal processing code in places where we are sure that the possibility exists that we can use colors. Not all places satisfy this requirement and the above code thereby technically runs to early and is slightly inefficient in that regard.
@@ -847,23 +838,22 @@ int main(int argc, char** argv) {
 		forcedOutputColoring = true;
 	}
 	else {
-	ANSISetupFailure:
+	ANSIOutputSetupFailure:
 		isOutputColored = false;
 		forcedOutputColoring = false;
 	}
 
+	// Only enable error colors if stderr is a TTY to make reading piped output easier for other programs.
 	if (isatty(STDERR_FILENO)) {
-#ifdef PLATFORM_WINDOWS						// On windows, you have to set up virtual terminal processing explicitly and it for some reason disables piping. That's why this group is here.
+#ifdef PLATFORM_WINDOWS
 		HANDLE consoleOutputHandle = GetStdHandle(STD_ERROR_HANDLE);
-		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { goto ANSIErrorSetupFailure; }						// If ANSI setup fails, just revert back to not coloring the output, so the user can at least see the output, even if it won't be colored.
-		DWORD mode;																												// NOTE: Because of the way this code plays with the rest of the code, the rest of the program will think that the output is being piped to something instead of being attached to a console, but that doesn't matter in this case.
+		if (!consoleOutputHandle || consoleOutputHandle == INVALID_HANDLE_VALUE) { goto ANSIErrorSetupFailure; }			// IMPORTANT-NOTE: The same fallback caviat exists here as in the above stdout ANSI processing.
+		DWORD mode;
 		if (!GetConsoleMode(consoleOutputHandle, &mode)) { goto ANSIErrorSetupFailure; }
 		if (!SetConsoleMode(consoleOutputHandle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) { goto ANSIErrorSetupFailure; }
 #endif
 
-		// NOTE: Technically, it would be more efficient to place the above virtual terminal processing code in places where we are sure that the possibility exists that we can use colors. Not all places satisfy this requirement and the above code thereby technically runs to early and is slightly inefficient in that regard.
-		// NOTE: That would require writing it multiple times though and the code wouldn't look as nice.
-		// NOTE: Since this overhead is so incredibly small and only transpires one single time, there is essentially no cost, which is why I'm ok with not moving it. SIDE-NOTE: Yes, we could use a function for this, but that still produces less pretty code than the current situation.
+		// NOTE: Same efficiency comment as above applies here as well.
 
 		isErrorColored = true;
 		forcedErrorColoring = true;
@@ -875,15 +865,17 @@ int main(int argc, char** argv) {
 	}
 
 	// NOTE: The reason we set the forcedOutputColoring as well as the isOutputColored flag above is because we set isOutputColored to forcedOutputColoring later in the code and we don't want that operation to mess up our coloring code.
+	// NOTE: Obviously, the same thing applies to forcedErrorColoring.
 
 	manageArgs(argc, argv);
 
-	HistoryBuffer::init();				// Regardless of whether or not we actually plan to use HistoryBuffer and whether or not it's count is 0, there will always be one slot in it's array that we can use to cache the current line. This method is memory and processing power efficient because we don't have to copy or swap for history pushes.
+	HistoryBuffer::init();			// Regardless of whether or not we actually plan to use HistoryBuffer and whether or not it's count is 0, there will always be one slot in it's array that we can use to cache the current line. This method is memory and processing power efficient because we don't have to copy or swap for history pushes.
 
 	// NOTE: As much of the branching is done outside of the loops as possible so as to avoid checking data over and over even though it'll never change it's value.
 	// The compiler is really good at doing this and technically would do it for me, but this way it's a safe bet and I can rest easy. Also, the main reason is that this way is more organized.
 	// Trying to branch inside the loops and to condense everything down to one single loop with a bunch of conditionals inside gets ugly really fast. I prefer this layout more.
-	if (isOutputColored) {					// If output is colored, activate colors before going into each loop and do the more complex matching algorithm
+
+	if (isOutputColored) {																			// If output is colored, activate colors before going into each loop and do the more complex matching algorithm
 		if (flags::allLines) {
 			if (flags::inverted) { return 0; }
 			if (flags::only_line_nums) {
@@ -892,14 +884,17 @@ int main(int argc, char** argv) {
 					std::cout << lineCounter << '\n'; lineCounter++;
 				LINE_WHILE_END()
 			}
-			if (flags::lineNums) {						// NOTE: One would think that an improvement would be to snap all line numbers to the same column so as to avoid the text shifting to the right when line numbers go from 9 to 10 or from 99 to 100, but thats easier said than done, because we don't actually know how much room to leave in the column before reading the whole file.
+			if (flags::lineNums) {
+				// NOTE: One would think that an improvement would be to snap all line numbers to the same column so as to avoid the text shifting to the right when line numbers go from 9 to 10 or from 99 to 100, but thats easier said than done, because we don't actually know how much room to leave in the column before reading the whole file.
 				LINE_WHILE_START				// NOTE: Since we should be prepared to read incredibly long files, I'm going to leave the snapping out, since we can't really implement it without giving ourselves a maximum amount of line numbers we can traverse.
-					if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
+					if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); WRITE_LINE_SUFFIX << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
 					(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++;
 				LINE_WHILE_END()
 			}
-			LINE_WHILE_START if (REGEX_SEARCH) { highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n'; }
-			else { std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; } LINE_WHILE_END()
+			LINE_WHILE_START
+				if (REGEX_SEARCH) { highlightMatches(); WRITE_LINE_SUFFIX << '\n'; }
+				else { std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; }
+			LINE_WHILE_END()
 		}
 
 		if (flags::context) {
@@ -976,14 +971,14 @@ int main(int argc, char** argv) {
 				LINE_WHILE_START
 					if (REGEX_SEARCH) {
 						HistoryBuffer::printLinesWithLineNums();
-						std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n';
+						std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); WRITE_LINE_SUFFIX << '\n';
 						lineCounter++;
 						for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 							INNER_WINDOWS_SIGNAL_CHECK_START
 								CURRENT_LINE_ALIAS.clear();
 								INNER_INPUT_STREAM_READ_LINE
 								if (REGEX_SEARCH) {
-									std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n';
+									std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); WRITE_LINE_SUFFIX << '\n';
 									lineCounter++;
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
 									continue;
@@ -1019,13 +1014,13 @@ int main(int argc, char** argv) {
 			LINE_WHILE_START
 				if (REGEX_SEARCH) {
 					HistoryBuffer::print();
-					highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n';
+					highlightMatches(); WRITE_LINE_SUFFIX << '\n';
 					for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							CURRENT_LINE_ALIAS.clear();
 							INNER_INPUT_STREAM_READ_LINE
 							if (REGEX_SEARCH) {
-								highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n';
+								highlightMatches(); WRITE_LINE_SUFFIX << '\n';
 								padding = HistoryBuffer::buffer_lastIndex;
 								continue;
 							}
@@ -1046,14 +1041,14 @@ int main(int argc, char** argv) {
 		if (flags::inverted) {
 			if (flags::only_line_nums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << '\n'; lineCounter++; LINE_WHILE_END() }
 			if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++; LINE_WHILE_END() }
-			LINE_WHILE_START if (REGEX_SEARCH) { LINE_WHILE_CONTINUE } std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; LINE_WHILE_END()
+			LINE_WHILE_START if (REGEX_SEARCH) { LINE_WHILE_CONTINUE } std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; LINE_WHILE_END()				// TODO: Should we use regex_match here instead of regex_search? Is one better than the other or does it not matter?
 		}
 		if (flags::only_line_nums) {
 			if (forcedOutputColoring) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << '\n'; } lineCounter++; LINE_WHILE_END() }
 			COLORED_RED_ONLY_LINE_WHILE_START if (REGEX_SEARCH) { std::cout << lineCounter << '\n'; } lineCounter++; COLORED_RED_ONLY_LINE_WHILE_END()
 		}
-		if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n'; } lineCounter++; LINE_WHILE_END() }
-		LINE_WHILE_START if (REGEX_SEARCH) { highlightMatches(); std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex) << '\n'; } LINE_WHILE_END()
+		if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); WRITE_LINE_SUFFIX << '\n'; } lineCounter++; LINE_WHILE_END() }
+		LINE_WHILE_START if (REGEX_SEARCH) { highlightMatches(); WRITE_LINE_SUFFIX << '\n'; } LINE_WHILE_END()
 	}
 
 	if (flags::allLines) {
