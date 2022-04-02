@@ -720,10 +720,21 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		}
 	}
 
+	/*static bool readLine(VectorString& line) {
+		while (true) {
+		for (; bytesRead < bytesReceived; bytesRead++) {
+			if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
+			line += buffer[bytesRead];
+		}
+		if (refillBuffer()) { continue; }
+		return false;
+		}
+	}*/
+
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
 	static bool discardLine() {																	// Reads the next line but doesn't store it anywhere since we're only reading it to advance the read position. Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF, SIGINT, SIGTERM or error on Linux.
 		while (true) {
-			for ( ; bytesRead < bytesReceived; bytesRead++) { if (buffer[bytesRead] == '\n') { bytesRead += 1; return true; } }						// Start reading all the data in current buffer and exit as soon as we've discarded an entire line.
+			for (; bytesRead < bytesReceived; bytesRead++) { if (buffer[bytesRead] == '\n') { bytesRead++; return true; } }							// Start reading all the data in current buffer and exit as soon as we've discarded an entire line.
 			if (refillBuffer()) { continue; }
 			return false;
 		}
