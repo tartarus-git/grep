@@ -51,6 +51,8 @@
 #include <string>
 #include <regex>
 
+#include <new>							// For std::nothrow.
+
 #ifdef PLATFORM_WINDOWS																									// These #defines are already defined in one of the Linux-only headers, but for Windows, we need to explicitly do it.
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
