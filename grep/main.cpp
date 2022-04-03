@@ -120,7 +120,7 @@ bool isErrorColored;
 
 // Output coloring.
 namespace color {
-	const char* const red = ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX;
+	const char* const red = ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX;			// TODO: Change these to const arrays, or else static_strlen is going to have trouble getting their actual size.
 	const char* const reset = ANSI_ESC_CODE_PREFIX "0" ANSI_ESC_CODE_SUFFIX;
 }
 
