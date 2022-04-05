@@ -429,7 +429,7 @@ public:
 	static void lastPrintLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << '\n'; } }
 	static void printLineNums() { lastPrintLineNums(); purgeAmountFilled(); }
 
-	static bool peekSafestLine(VectorString*& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer + beginIndex * sizeof(VectorString); return true; } return false; }
+	static bool peekSafestLine(VectorString*& safestLine) { if (amountFilled == buffer_lastIndex) { safestLine = buffer + beginIndex; return true; } return false; }
 
 	static bool peekSafestLineNum(size_t& safestNum) { if (amountFilled == buffer_lastIndex) { safestNum = lineCounter - buffer_lastIndex; return true; } return false; }
 
@@ -513,7 +513,7 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 					}
 					HistoryBuffer::buffer_lastIndex = parseUInt(argv[i]);
 					if (HistoryBuffer::buffer_lastIndex == 0) { continue; }															// Context value 0 is the same as no context, so don't bother with doing any context calculations while in the main loops.
-					flags::context = true;
+					flags::context = true;				// TODO: This doesn't obey the right hand rule thing.
 					continue;
 				}
 
@@ -683,7 +683,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 	}
 
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
-	static bool readLine(VectorString& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
+	/*static bool readLine(VectorString& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
 		// NOTE: We could implement transfers that are more than one byte wide in this alignment code like we did in the transfer code that comes after, but that would be a lot of work and produce a lot of code.
 		// TODO: There might be a way to implement it that I haven't thought of, but as it stands, I'm leaving it as a future improvement.
 		if (isReadPositionUnaligned) {
@@ -718,9 +718,9 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			if (refillBuffer()) { continue; }																		// If we never encounter the end of the line in the current buffer, fetch more data.
 			return false;																							// If something went wrong while refilling buffer, return false.
 		}
-	}
+	}*/
 
-	/*static bool readLine(VectorString& line) {
+	static bool readLine(VectorString& line) {
 		while (true) {
 		for (; bytesRead < bytesReceived; bytesRead++) {
 			if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
@@ -729,7 +729,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		if (refillBuffer()) { continue; }
 		return false;
 		}
-	}*/
+	}
 
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
 	static bool discardLine() {																	// Reads the next line but doesn't store it anywhere since we're only reading it to advance the read position. Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF, SIGINT, SIGTERM or error on Linux.
