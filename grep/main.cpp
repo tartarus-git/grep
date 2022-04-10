@@ -97,7 +97,6 @@ Beneifts of SWAR over SIMD: The benefits come only from the fact that, through s
 // ANSI escape code helpers.
 #define ANSI_ESC_CODE_PREFIX "\033["
 #define ANSI_ESC_CODE_SUFFIX "m"
-#define ANSI_ESC_CODE_MIN_SIZE (static_strlen(ANSI_ESC_CODE_PREFIX) + static_strlen(ANSI_ESC_CODE_SUFFIX))
 
 const char* helpText = "grep accepts text as input and outputs the lines from the input that have the specified keyphrase in them\n" \
 					   "\n" \
@@ -120,8 +119,8 @@ bool isErrorColored;
 
 // Output coloring.
 namespace color {
-	const char* const red = ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX;			// TODO: Change these to const arrays, or else static_strlen is going to have trouble getting their actual size.
-	const char* const reset = ANSI_ESC_CODE_PREFIX "0" ANSI_ESC_CODE_SUFFIX;
+	const char red[] = ANSI_ESC_CODE_PREFIX "31" ANSI_ESC_CODE_SUFFIX;
+	const char reset[] = ANSI_ESC_CODE_PREFIX "0" ANSI_ESC_CODE_SUFFIX;
 }
 
 // SIDE-NOTE: const char* const instead of const char* doesn't always work. In the cases where you intend to change what the const char* pointer points to, const char* allows that while const char* const doesn't. In this case, const char* const is absolutely fine, but a lot of people still don't write it because personal preference and style.
@@ -135,12 +134,12 @@ void reportError(const char (&msg)[N]) {																		// NOTE: The reason we
 
 		// Copy in the ANSI code for red color.
 		std::memcpy(buffer, color::red, static_strlen(color::red));												// NOTE: Technically, it would be more efficient to write "ERROR: " in every error message individually, but that probably means the executable is larger because of the extra .rodata data, which is undesirable.
-
+																												// NOTE: We could also combine the color codes with the "ERROR: " string in order to have less copy operations and simpler code, but that has the same issue as above.
 		// Copy in the ERROR tag.
 		std::memcpy(buffer + static_strlen(color::red), "ERROR: ", static_strlen("ERROR: "));					// NOTE: memcpy is the C-style version of the function and std::memcpy is the C++-style version of the function. They're both literally the same function in every single way, but I'm going to use std because it's more "proper".
 
 		// Copy in the actual error message.
-		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: "), msg, N - 1);
+		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: "), msg, N - 1);					// SIDE-NOTE: You cannot combine const char[]'s like you can combine string literals ("hi" "there" <-- concatination), even though string literals explicitly have the type const char[]. It's better this way, it makes more sense.
 
 		// Copy in the ANSI code for color reset.
 		std::memcpy(buffer + static_strlen(color::red) + static_strlen("ERROR: ") + N - 1, color::reset, static_strlen(color::reset));
@@ -643,25 +642,11 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
 	static bool refillBuffer() {			// TODO: Check for memory leaks with visual studio after going through the code.
-#ifndef PLATFORM_WINDOWS
-		// When no more data left in buffer, try get more.
-		if (poll(fds, 2, -1) == -1) {																				// Block until we either get some input on stdin or get either a SIGINT or a SIGTERM.
-			reportError("failed to poll stdin, SIGINT and SIGTERM");
-			return false;
-		}
-
-		if (fds[1].revents) { return false; }																		// Signal EOF if we caught a signal.
-#endif
-
-		bytesReceived = crossplatform_read(STDIN_FILENO, buffer, bufferSize);										// Read as much as we can fit into the buffer.
-
-		if (bytesReceived == 0) { return false; }																	// In case of actual EOF, signal EOF.
-		if (bytesReceived == -1) {																					// In case of error, log and signal EOF.
-			reportError("failed to read from stdin");
-			return false;
-		}
-		bytesRead = 0;																								// If new data is read, the read head needs to be reset to the beginning of the buffer.
-
+		// IMPORTANT-TODO: The main bug right now is this: The following resize code doesn't ever get triggered because windows never reads the full buffer from the file.
+		// I think this is because the full buffer size is used to know how much to read, but the actual buffer gets filled with \r\n converted to \n.
+		// That gets reflected in the returned bytesRead statistic, as stated in the docs.
+		// This means, we can basically never tell when we should resize the buffer based on the bytesReceived.
+		// How can we tell if not through that? No idea, figure something out.
 		if (bytesReceived == bufferSize) {																			// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
 			if (bufferSize == INPUT_STREAM_BUFFER_MAX_SIZE) {														// NOTE: This comparison is only possible because INPUT_STREAM_BUFFER_MAX_SIZE is a multiple of INPUT_STREAM_BUFFER_SIZE_STEP.
 				delete[] buffer;																					// Delete current allocation to make room for the reallocation.
@@ -679,22 +664,45 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			}
 		}
 
+#ifndef PLATFORM_WINDOWS
+		// When no more data left in buffer, try get more.
+		if (poll(fds, 2, -1) == -1) {																				// Block until we either get some input on stdin or get either a SIGINT or a SIGTERM.
+			reportError("failed to poll stdin, SIGINT and SIGTERM");
+			return false;
+		}
+
+		if (fds[1].revents) { return false; }																		// Signal EOF if we caught a signal.
+#endif
+
+		bytesReceived = crossplatform_read(STDIN_FILENO, buffer, bufferSize);										// Read as much as we can fit into the buffer.
+		if (bytesReceived != bufferSize) { std::cout << "testthing hit --> " << bytesReceived << '\n'; }
+		else { std::cout << "normalthing hit\n"; }
+
+		if (bytesReceived == 0) { return false; }																	// In case of actual EOF, signal EOF.
+		if (bytesReceived == -1) {																					// In case of error, log and signal EOF.
+			reportError("failed to read from stdin");
+			return false;
+		}
+		bytesRead = 0;																								// If new data is read, the read head needs to be reset to the beginning of the buffer.
+
+
 		return true;
 	}
 
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
-	/*static bool readLine(VectorString& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
+	static bool readLine(VectorString& line) {																		// Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF or SIGINT or SIGTERM or error on Linux.
 		// NOTE: We could implement transfers that are more than one byte wide in this alignment code like we did in the transfer code that comes after, but that would be a lot of work and produce a lot of code.
 		// TODO: There might be a way to implement it that I haven't thought of, but as it stands, I'm leaving it as a future improvement.
 		if (isReadPositionUnaligned) {
 			ssize_t limiter = bytesRead + 8 - (bytesRead % 8) - 1;													// TODO: Research if there is a more efficient way to do this. There is probably some fancy bit twiddling thing I could do here.
-			for (; bytesRead < limiter && bytesRead < bytesReceived; bytesRead++) {
+			for (; bytesRead < limiter; bytesRead++) {
+				if (bytesRead == bytesReceived) { if (!refillBuffer()) { return false; } goto templabel; }
 				if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
-				if (!(line += buffer[bytesRead])) { return false; }
+				if (!(line += buffer[bytesRead])) { return false; }					// TODO: You need to clean up this part of the code I think.
 			}
-			if (bytesRead == bytesReceived) { if (!refillBuffer()) { return false; } }
-			if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = false; return true; }
-			if (!(line += buffer[bytesRead])) { return false; }
+			if (bytesRead == bytesReceived) { if (!refillBuffer()) { return false; } goto templabel; }			// NOTE: goto templabel because as soon as buffer is refilled, alignment is inherently there again.
+			if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = false; return true; }			// NOTE: We can safely do this without worry because the buffer always at least one character in it at this point. Because of the buffer refill before the limiter check inside of the loop. The order is important there.
+			if (!(line += buffer[bytesRead])) { return false; }				// TODO: Report error here and in other places like it.
 			bytesRead++;
 			isReadPositionUnaligned = false;
 		}
@@ -703,8 +711,22 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		// You would have to copy chunks of data around when resizing the InputStream, since we don't want those to get lost while doing that, but since the InputStream doesn't resize often in the grand scheme of things,
 		// it should actually be more efficient, with less overhead. It would be a major redesign and I don't want to do that right now, I'm leaving it as a future improvement.
 
+	templabel:
+
+
 		while (true) {														// NOTE: I could check for shouldLoopRun here, but it would only make sense for lines that are incredibly super duper mega long, which none really are. Doing a comparison here would probably bring more harm than good IMO.
-			for (; bytesRead < bytesReceived; bytesRead += 8) {														// Read all the data in the buffer.
+			for (; bytesRead < bytesReceived; bytesRead += 8) {													// NOTE: The - 7 is to make sure that, whatever happens, the bytesRead head (which is always snapped to the alignment bounds), doesn't cause unused memory to be read.
+
+				// NOTE: The above explanation of the - 7 leaves a little to be questioned. The main thing is: One would expect to use - 8, why - 7? - 8 would work almost as well, achieving exactly the same result in all cases but one:
+				// NOTE: That case is when bytesReceived ends on a completed byte and there is nothing wrong with reading the whole buffer from this loop. With - 8, that would cause the whole last byte not to be read, while - 7 would allow the byte to be read in that case.
+				// NOTE: Because of this one case, - 7 is superior to - 8 in this situation.
+
+				// NOTE: This whole - 7 might also seem pointless because the buffer size is always a multiple of 8 anyway, making it impossible for unalignment issues to pop up. That isn't true though, since the buffer refill doesn't ever have to reach the end of the buffer.
+				// NOTE: When the user is creating the stdin input on the fly by typing things in, most of the time, the buffer refill won't be able to generate any sort of aligned buffer data, because the input data length is up to the user, making the - 7 here imperative.
+
+				// TODO: Right now, the -7 is gone for testing, put it back in once your done testing. We were testing why the tests still fail even when bytesReceived should be a multiple of 8 when reading from the majority of a file.
+				// The reason is stated above somewhere. So technically we're done testing.
+
 				if (buffer[bytesRead + 0] == '\n') { bytesRead++; isReadPositionUnaligned = true; return true; }
 				if (buffer[bytesRead + 1] == '\n') { if (!(line += buffer[bytesRead])) { return false; } bytesRead += 2; isReadPositionUnaligned = true; return true; }
 				if (buffer[bytesRead + 2] == '\n') { if (!(line += *(uint16_t*)(buffer + bytesRead))) { return false; } bytesRead += 3; isReadPositionUnaligned = true; return true; }
@@ -715,25 +737,18 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 				if (buffer[bytesRead + 7] == '\n') { if (!line.write7(buffer + bytesRead)) { return false; } bytesRead += 8; return true; }
 				if (!(line += *(uint64_t*)(buffer + bytesRead))) { return false; }
 			}
+			/*for (; bytesRead < bytesReceived; bytesRead++) {														// NOTE: The above protection against reading unused memory causes there to be unread bytes in the buffer. There are always less than 8, which means we don't have to consider the case of \n being the last one like above.
+				if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = true; return true; }
+				if (!(line += buffer[bytesRead])) { return false; }
+			}*/
 			if (refillBuffer()) { continue; }																		// If we never encounter the end of the line in the current buffer, fetch more data.
 			return false;																							// If something went wrong while refilling buffer, return false.
-		}
-	}*/
-
-	static bool readLine(VectorString& line) {
-		while (true) {
-		for (; bytesRead < bytesReceived; bytesRead++) {
-			if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
-			line += buffer[bytesRead];
-		}
-		if (refillBuffer()) { continue; }
-		return false;
 		}
 	}
 
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
 	static bool discardLine() {																	// Reads the next line but doesn't store it anywhere since we're only reading it to advance the read position. Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF, SIGINT, SIGTERM or error on Linux.
-		while (true) {
+		while (true) {						// TODO: This function needs to start setting the isReadPositionUnaligned flag when it needs to be set, or else it could unalign bytesRead, causing all sorts of artifacts.
 			for (; bytesRead < bytesReceived; bytesRead++) { if (buffer[bytesRead] == '\n') { bytesRead++; return true; } }							// Start reading all the data in current buffer and exit as soon as we've discarded an entire line.
 			if (refillBuffer()) { continue; }
 			return false;
