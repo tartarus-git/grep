@@ -5,7 +5,7 @@
 
 #define VECTOR_STRING_BUFFER_MAX_SIZE (8192 * 1024 * 4)				// 32 MB	<-- ABSOLUTELY MUST be a multiple of VECTOR_STRING_BUFFER_STEP_SIZE, or else program will break in certain scenarios.
 #define VECTOR_STRING_BUFFER_START_SIZE 8192						// NOTE: There shouldn't be a reason for these sizes to coincide with file sys block size like those above, since these are purely in memory. Just in case (and because there is no downside in this case), we set them to the same ones as above.
-#define VECTOR_STRING_BUFFER_STEP_SIZE 8192							// NOTE: I figure that, in case the OS needs to write some RAM to the swap space on the hard disk, this will make our memory recoverable in a more efficient way, possibly giving us a marginal speed-up. This theory might not even be a bad one, but I don't have proof.
+#define VECTOR_STRING_BUFFER_SIZE_STEP 8192							// NOTE: I figure that, in case the OS needs to write some RAM to the swap space on the hard disk, this will make our memory recoverable in a more efficient way, possibly giving us a marginal speed-up. This theory might not even be a bad one, but I don't have proof.
 
 // NOTE: AFAIK, the file system block size is a unit of work for the file system. File reads are done in blocks which are the size of the file system block size.
 // If the buffer isn't a multiple of the file system block size, we could end up reading way more data from the file than we need (1 extra block), even if we're just a couple of bytes
@@ -40,8 +40,8 @@
 #define crossplatform_write(...) write(__VA_ARGS__)
 #endif
 
-// TODO: Why do we need cstdio?
-#include <cstdio>																					// NOTE: Use "c___" headers instead of "____.h" headers whenever possible. The "c___" counterparts minimize global scope pollution by putting a lot of things in namespaces and replacing some #defines with functions. It's more "correct".
+// NOTE: Use "c___" headers instead of "____.h" headers whenever possible. The "c___" counterparts minimize global scope pollution by putting a lot of things in namespaces and replacing some #defines with functions. It's more "correct".
+
 #include <iostream>																					// For std::cout. We don't use std::cin or std::cerr because we handle both of those pathways through raw syscalls and custom buffering.
 
 #include <cstring>																					// For some weird reason, std::memcpy is located inside this header file, which means we should include it. We also use std::strlen, which is also in this header. We might use a couple other things from here, not sure.
@@ -229,21 +229,21 @@ size_t lineCounter = 1;
 // This class is a replacement for std::string. We use it because it has (AFAIK) more efficient character addition functions.
 class VectorString {
 public:
-	char* buffer;
-	size_t bufferSize = VECTOR_STRING_BUFFER_START_SIZE;
-	size_t bufferWriteHead = 0;						// TODO: Change buffer to data and rework the variable naming a little. Also, redo the defines at the top of the file if necessary and check other names that need to be checked as well.
+	char* data;
+	size_t capacity = VECTOR_STRING_BUFFER_START_SIZE;
+	size_t length = 0;
 
 	// Initialize the VectorString. This consists solely of allocating space on the heap for the data array.
 	bool init() {
-		buffer = (char*)malloc(VECTOR_STRING_BUFFER_START_SIZE);						// SUPER-IMPORTANT-NOTE: We are forced to use malloc here since we use realloc in the following bit of code. Mixing C-style and C++-style allocations is UB (data structures and/or the heap location could be different, etc...). This is the only way.
-		if (!buffer) {
-			reportError("failed to allocate a vector string buffer");
+		data = (char*)malloc(VECTOR_STRING_BUFFER_START_SIZE);						// SUPER-IMPORTANT-NOTE: We are forced to use malloc here since we use realloc in the following bit of code. Mixing C-style and C++-style allocations is UB (data structures and/or the heap location could be different, etc...). This is the only way.
+		if (!data) {
+			reportError("failed to allocate a vector string data block");
 			return false;
 		}
 		return true;
 	}
 
-	bool enoughSpaceForAddition(size_t additionSize) { return bufferSize - bufferWriteHead >= additionSize; }
+	bool enoughSpaceForAddition(size_t additionSize) { return capacity - length >= additionSize; }
 
 	// NOTE: The following are super important points about reallocation of data, because there are some nuances to how things USUALLY behave on MOST hardware:
 	// realloc reallocates a block of memory with a different size and copies all of your data into the new block.
@@ -266,11 +266,11 @@ public:
 	// EXTRA: If you don't know whether your scaling the block up or down, free/malloc, because of the speed data given above this makes the most sense in these situations.
 
 	bool allocateMoreSpace() {
-		if (bufferSize == VECTOR_STRING_BUFFER_MAX_SIZE) { return false; }								// NOTE: This comparison is possible because VECTOR_STRING_BUFFER_MAX_SIZE should always be a multiple of VECTOR_STRING_BUFFER_STEP_SIZE.
-		bufferSize += VECTOR_STRING_BUFFER_STEP_SIZE;
-		char* tempBuffer = (char*)realloc(buffer, bufferSize);											// NOTE: Use realloc because we want to keep the data in the VectorString.
-		if (tempBuffer) { buffer = tempBuffer; return true; }
-		bufferSize -= VECTOR_STRING_BUFFER_STEP_SIZE;													// NOTE: Technically, we don't need to leave the object in a valid state if we fail, since the program always exits soon after, but for future expandability, I'm going to leave it in.
+		if (capacity == VECTOR_STRING_BUFFER_MAX_SIZE) { return false; }								// NOTE: This comparison is possible because VECTOR_STRING_BUFFER_MAX_SIZE should always be a multiple of VECTOR_STRING_BUFFER_STEP_SIZE.
+		capacity += VECTOR_STRING_BUFFER_SIZE_STEP;
+		char* tempBuffer = (char*)realloc(data, capacity);												// NOTE: Use realloc because we want to keep the data in the VectorString.
+		if (tempBuffer) { data = tempBuffer; return true; }
+		capacity -= VECTOR_STRING_BUFFER_SIZE_STEP;														// NOTE: Technically, we don't need to leave the object in a valid state if we fail, since the program always exits soon after, but for future expandability, I'm going to leave it in.
 		reportError("ran out of heap memory while enlarging VectorString");
 		return false;
 	}
@@ -278,25 +278,25 @@ public:
 	// The following functions all add characters to the VectorString. There are so many because depending on the amount you want to add, there are different optimal methods.
 
 	bool operator+=(const char& character) {
-		if (enoughSpaceForAddition(sizeof(character))) { addition: buffer[bufferWriteHead] = character; bufferWriteHead++; return true; }
+		if (enoughSpaceForAddition(sizeof(character))) { addition: data[length] = character; length++; return true; }
 		if (allocateMoreSpace()) { goto addition; }
 		return false;
 	}
 
 	bool operator+=(const uint16_t& characters) {
-		if (enoughSpaceForAddition(sizeof(characters))) { addition: *(uint16_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (enoughSpaceForAddition(sizeof(characters))) { addition: *(uint16_t*)(data + length) = characters; length += sizeof(characters); return true; }
 		if (allocateMoreSpace()) { goto addition; }
 		return false;
 	}
 
 	bool operator+=(const uint32_t& characters) {
-		if (enoughSpaceForAddition(sizeof(characters))) { addition: *(uint32_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (enoughSpaceForAddition(sizeof(characters))) { addition: *(uint32_t*)(data + length) = characters; length += sizeof(characters); return true; }
 		if (allocateMoreSpace()) { goto addition; }
 		return false;
 	}
 
 	bool operator+=(const uint64_t& characters) {
-		if (enoughSpaceForAddition(sizeof(characters))) { addition: *(uint64_t*)(buffer + bufferWriteHead) = characters; bufferWriteHead += sizeof(characters); return true; }
+		if (enoughSpaceForAddition(sizeof(characters))) { addition: *(uint64_t*)(data + length) = characters; length += sizeof(characters); return true; }
 		if (allocateMoreSpace()) { goto addition; }
 		return false;
 	}
@@ -304,10 +304,10 @@ public:
 	bool write3(const char* characters) {
 		if (enoughSpaceForAddition(3)) {
 		addition:
-			char* position = buffer + bufferWriteHead;
+			char* position = data + length;
 			*(uint16_t*)(position) = *(uint16_t*)characters;
 			*(position + 2) = *(characters + 2);
-			bufferWriteHead += 3;
+			length += 3;
 			return true;
 		}
 		if (allocateMoreSpace()) { goto addition; }
@@ -317,10 +317,10 @@ public:
 	bool write5(const char* characters) {
 		if (enoughSpaceForAddition(5)) {
 		addition:
-			char* position = buffer + bufferWriteHead;
+			char* position = data + length;
 			*(uint32_t*)(position) = *(uint32_t*)characters;
 			*(position + 4) = *(characters + 4);
-			bufferWriteHead += 5;
+			length += 5;
 			return true;
 		}
 		if (allocateMoreSpace()) { goto addition; }
@@ -330,10 +330,10 @@ public:
 	bool write6(const char* characters) {
 		if (enoughSpaceForAddition(6)) {
 		addition:
-			char* position = buffer + bufferWriteHead;
+			char* position = data + length;
 			*(uint32_t*)(position) = *(uint32_t*)characters;
 			*(uint16_t*)(position + 4) = *(uint16_t*)(characters + 4);
-			bufferWriteHead += 6;
+			length += 6;
 			return true;
 		}
 		if (allocateMoreSpace()) { goto addition; }
@@ -343,20 +343,20 @@ public:
 	bool write7(const char* characters) {
 		if (enoughSpaceForAddition(7)) {
 		addition:
-			char* position = buffer + bufferWriteHead;
+			char* position = data + length;
 			*(uint32_t*)(position) = *(uint32_t*)characters;
 			*(uint16_t*)(position + 4) = *(uint16_t*)(characters + 4);
 			*(position + 6) = *(characters + 6);
-			bufferWriteHead += 7;
+			length += 7;
 			return true;
 		}
 		if (allocateMoreSpace()) { goto addition; }
 		return false;
 	}
 
-	void clear() { bufferWriteHead = 0; }
+	void clear() { length = 0; }
 
-	void release() { delete[] buffer; }																	// NOTE: delete and delete[] can throw exceptions, but only if the destructors of the objects in question throw exceptions (which isn't encouraged). In this situation, since the object in question is char, this never throws exceptions.
+	void release() { delete[] data; }																	// NOTE: delete and delete[] can throw exceptions, but only if the destructors of the objects in question throw exceptions (which isn't encouraged). In this situation, since the object in question is char, this never throws exceptions.
 };
 
 // Keeps track of previous lines that didn't contain any matches. Very useful for operation with the --context flag but also keeps track of the one and only current line when in normal operation (for efficiency).
@@ -379,10 +379,12 @@ public:
 	// We can exit directly from this function because no other memory needs disposing of at this point.
 	static void init() {
 		buffer_len = buffer_lastIndex + 1;
-		buffer = new VectorString[buffer_len];
+		buffer = new (std::nothrow) VectorString[buffer_len];
+		if (!buffer) { reportError("failed to allocate HistoryBuffer"); exit(EXIT_FAILURE); }
 		for (unsigned int i = 0; i < buffer_len; i++) {
 			if (!buffer[i].init()) {
 				for (unsigned int j = 0; j < i; j++) { buffer[j].release(); }
+				// NOTE: The reason we do the releasing manually instead of with destructors is because if we used destructors, we wouldn't be able to only destruct the objects that have already been constructed, like we do here. We would have to put a validity check inside each destructor, which isn't much overhead, but still suboptimal.
 				delete[] buffer;
 				exit(EXIT_FAILURE);														// NOTE: We use EXIT_FAILURE here because this isn't directly the user's fault. This error happens when too little memory is available on the system, so it's an environment problem. We denote those with EXIT_FAILURE.
 			}
@@ -408,7 +410,7 @@ public:
 	static void purgeWithAmountSet() { purge(); purgeAmountFilled(); }
 
 	// Print all the lines in the historical partition of the HistoryBuffer to the console.
-	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout.write(buffer[beginIndex].buffer, buffer[beginIndex].bufferWriteHead) << '\n'; } }
+	static void print() { for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1)) { std::cout.write(buffer[beginIndex].data, buffer[beginIndex].length) << '\n'; } }
 	// NOTE: It is important to use '\n' instead of std::endl because std::endl puts a newline into the stream but also flushes it, which is a syscall, which is super slow. '\n' doesn't flush, so faster.
 
 	// NOTE: We could store the amount filled and edit the variable with every call to push(), but I doubt that would be efficient since push is called so many more times than print is (at least normally).
@@ -420,10 +422,10 @@ public:
 	static void printLinesWithLineNums() {
 		if (index == beginIndex) { return; }
 		lineCounter -= calculateAmountFilled();
-		(std::cout << lineCounter << ' ').write(buffer[beginIndex].buffer, buffer[beginIndex].bufferWriteHead) << '\n';
+		(std::cout << lineCounter << ' ').write(buffer[beginIndex].data, buffer[beginIndex].length) << '\n';
 		lineCounter++;
 		beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1);
-		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) { (std::cout << lineCounter << ' ').write(buffer[beginIndex].buffer, buffer[beginIndex].bufferWriteHead) << '\n'; }
+		for ( ; beginIndex != index; beginIndex = (beginIndex == buffer_lastIndex ? 0 : beginIndex + 1), lineCounter++) { (std::cout << lineCounter << ' ').write(buffer[beginIndex].data, buffer[beginIndex].length) << '\n'; }
 	}
 
 	static void lastPrintLineNums() { for (size_t historyLine = lineCounter - amountFilled; historyLine < lineCounter; historyLine++) { std::cout << historyLine << '\n'; } }
@@ -434,7 +436,7 @@ public:
 	static bool peekSafestLineNum(size_t& safestNum) { if (amountFilled == buffer_lastIndex) { safestNum = lineCounter - buffer_lastIndex; return true; } return false; }
 
 	// Release all the VectorStrings before freeing the memory in which they reside.
-	static void release() { for (unsigned int i = 0; i < buffer_len; i++) { buffer[i].release(); } delete[] buffer; }			// TODO: Make sure this is getting release everywhere where it's supposed to.
+	static void release() { for (unsigned int i = 0; i < buffer_len; i++) { buffer[i].release(); } delete[] buffer; }
 };
 
 VectorString* HistoryBuffer::buffer;
@@ -512,8 +514,8 @@ unsigned int parseFlags(int argc, char** argv) {																// NOTE: If you 
 						exit(EXIT_SUCCESS);
 					}
 					HistoryBuffer::buffer_lastIndex = parseUInt(argv[i]);
-					if (HistoryBuffer::buffer_lastIndex == 0) { continue; }															// Context value 0 is the same as no context, so don't bother with doing any context calculations while in the main loops.
-					flags::context = true;				// TODO: This doesn't obey the right hand rule thing.
+					if (HistoryBuffer::buffer_lastIndex == 0) { flags::context = false; continue; }								// Context value 0 is the same as no context, so don't bother with doing any context calculations while in the main loops. Set flags::context to false because rightmost instance rule.
+					flags::context = true;
 					continue;
 				}
 
@@ -614,8 +616,9 @@ class InputStream {
 	static bool isReadPositionUnaligned;																			// Flag signals when the current read position is not on an 8-byte boundary.
 
 public:
-	static void init() {
-		buffer = new char[INPUT_STREAM_BUFFER_START_SIZE];															// Initialize buffer with the starting amount of memory.
+	static bool init() {
+		buffer = new (std::nothrow) char[INPUT_STREAM_BUFFER_START_SIZE];											// Initialize buffer with the starting amount of memory.
+		if (!buffer) { reportError("failed to allocate InputStream buffer"); return false; }
 		
 #ifndef PLATFORM_WINDOWS
 		// Add SIGINT and SIGTERM to set of tracked signals.
@@ -630,10 +633,12 @@ public:
 		{
 			int sigfd = signalfd(-1, &sigmask, 0);
 			fds[1].fd = sigfd;																						// Add sigfd to list of to be polled file descriptors, so we can be notified if we get a signal from poll. It doesn't matter if it's -1 because on failure we set it to that anyway.
-			return;
+			return true;
 		}
 
-errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now unused entry in fds because some error prevented us from setting it up correctly.
+	errorBranch:
+		fds[1].fd = -1;																								// Tell poll to ignore the now unused entry in fds because some error prevented us from setting it up correctly.
+		return true;
 #endif
 	}
 
@@ -643,7 +648,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
 	// NOTE: I'm assuming that multiple copies of refillBuffer are generated, one for when the offset is 0 and one for when the offset is variable. That would be an optimization that I would expect the compiler to do. It would make the code faster.
-	static bool refillBuffer(size_t offset = 0) {			// TODO: Check for memory leaks with visual studio after going through the code.
+	static bool refillBuffer(size_t offset = 0) {
 
 		// NOTE: In Windows, the following buffer expansion check basically never triggers, since the bytesReceived are almost always less than the total buffer size. The reason being that the total buffer size is used to determine the amount of bytes to read, but the amount of characters actually put into the buffer
 		// NOTE: is determined by how many \r\n's needed to be replaced with \n. Because of this discrepency, there is no good way to do the buffer expansion AFAIK. Still, I'm going to keep the check in, in case you decide to grep an input stream that only has \n.
@@ -665,7 +670,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 						return false;
 					}
 				}
-			}				// TODO: Think of ways to run this program like 10000 times and average the timing, so that it can be compared to the exe of another branch and I can accurately find out which one is faster.
+			}				// TODO: Think of ways to run this program like 10000 times and average the timing, so that it can be compared to the exe of another commit and I can accurately find out which one is faster.
 		}
 
 #ifndef PLATFORM_WINDOWS
@@ -715,8 +720,8 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			}
 			else {
 				if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = false; return true; }
-				if (!(line += buffer[bytesRead])) { return false; }
-				bytesRead++;
+				if (!(line += buffer[bytesRead])) { return false; }													// NOTE: Returning false will lead to exit with EXIT_SUCCESS, even though this branch triggers for lack of memory, which is a system/environment issue and should be denoted with EXIT_FAILURE, based on our self-imposed rules.
+				bytesRead++;																						// NOTE: There is no way to make this exhibit the "correct" behaviour without coming up with a brand new system and possibly some extra overhead. Based on that, I'm going to just leave it as an exception to the rule.
 				isReadPositionUnaligned = false;
 			}
 		}
@@ -811,35 +816,31 @@ bool InputStream::isReadPositionUnaligned = false;
 std::cmatch matchData;
 
 #define CURRENT_LINE_ALIAS HistoryBuffer::buffer[HistoryBuffer::index]
-#define REGEX_SEARCH std::regex_search((const char*)CURRENT_LINE_ALIAS.buffer, (const char*)(CURRENT_LINE_ALIAS.buffer + CURRENT_LINE_ALIAS.bufferWriteHead), matchData, keyphraseRegex)
+#define REGEX_SEARCH std::regex_search((const char*)CURRENT_LINE_ALIAS.data, (const char*)(CURRENT_LINE_ALIAS.data + CURRENT_LINE_ALIAS.length), matchData, keyphraseRegex)
 
 ptrdiff_t matchSuffixIndex;
 
 void highlightMatches() {																							// I assume this will be inlined. Probably not in debug mode, but almost definitely in release mode.
 	matchSuffixIndex = 0;				// NOTE: Technically, unrolling the first iteration of the below loop would allow us to skip the overhead of initializing this variable to 0 and the overhead of the following additions, but the compiler probably does it for us.
-	const char* stringBufferEnd = CURRENT_LINE_ALIAS.buffer + CURRENT_LINE_ALIAS.bufferWriteHead;
+	const char* stringBufferEnd = CURRENT_LINE_ALIAS.data + CURRENT_LINE_ALIAS.length;
 	do {
 		ptrdiff_t newMatchPosition = matchData.position();
-		std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, newMatchPosition);
+		std::cout.write(CURRENT_LINE_ALIAS.data + matchSuffixIndex, newMatchPosition);
 		std::cout << color::red;
 		matchSuffixIndex += newMatchPosition;
 		ptrdiff_t matchLength = matchData.length();
-		std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, matchLength);
+		std::cout.write(CURRENT_LINE_ALIAS.data + matchSuffixIndex, matchLength);
 		std::cout << color::reset;
 		matchSuffixIndex += matchLength;
-		// The following assumes that I've got a copy assignment operator set up, which I don't anymore.
-		// CURRENT_LINE_ALIAS = std::move((const std::string)matchData.suffix().str());			// SUPER-IMPORTANT_TODO: For some reason, this line compiles, even though intellisense is adamant that it's an issue.
-		//CURRENT_LINE_ALIAS = (const std::string&&)std::move((const std::string)matchData.suffix().str());				// This line doesn't compile though, even though it is the same thing.
-					// SUPER-IMPORTANT-TODO: The above issue seems to be a bug in the compiler, which you should definitely tell someone through some feedback thing. Best option would be to post the issue on Stackoverflow and see if it's actually a bug or not.
-	} while (std::regex_search((const char*)(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex), (const char*)stringBufferEnd, matchData, keyphraseRegex));
+	} while (std::regex_search((const char*)(CURRENT_LINE_ALIAS.data + matchSuffixIndex), (const char*)stringBufferEnd, matchData, keyphraseRegex));
 }
 
 // A couple of #defines to help reduce code bloat in the coming sections of the program.
 
 #ifdef PLATFORM_WINDOWS
-#define MAIN_WHILE InputStream::init(); while (shouldLoopRun)
+#define MAIN_WHILE if (!InputStream::init()) { HistoryBuffer::release(); return EXIT_FAILURE; } while (shouldLoopRun)
 #else
-#define MAIN_WHILE InputStream::init(); while (true)
+#define MAIN_WHILE if (!InputStream::init()) { HistoryBuffer::release(); return EXIT_FAILURE; } while (true)
 #endif
 
 // NOTE: As per the standard, you can use function-style macros while leaving one or more or all of the parameters blank. They just won't be filled with anything and you'll have empty spots, which is exactly the behaviour we want here, so everythings fine.
@@ -863,11 +864,7 @@ void highlightMatches() {																							// I assume this will be inlined
 #define INNER_INPUT_STREAM_READ_LINE if (!InputStream::readLine(CURRENT_LINE_ALIAS)) { InputStream::release(); HistoryBuffer::release(); return 0; }				// NOTE: This code also doesn't break out of the main loop on purpose, even though that would work. This method is more efficient.
 #define INNER_INPUT_STREAM_DISCARD_LINE if (!InputStream::discardLine()) { InputStream::release(); HistoryBuffer::release(); return 0; }
 
-#define WRITE_LINE_SUFFIX std::cout.write(CURRENT_LINE_ALIAS.buffer + matchSuffixIndex, CURRENT_LINE_ALIAS.bufferWriteHead - matchSuffixIndex)
-
-// NOTE: I don't handle potential errors for some of the small allocations because your system would need to be super super low on resources for the errors to get thrown, which shouldn't happen normally.
-// If your system is super super low on resources and you run this program, it's kind of your own fault is it not?
-// TODO: Go through the program and make sure that this way of thinking won't bite you in your backside. Why not handle the errors, it's not going to hurt anyone? Really consider doing it.
+#define WRITE_LINE_SUFFIX std::cout.write(CURRENT_LINE_ALIAS.data + matchSuffixIndex, CURRENT_LINE_ALIAS.length - matchSuffixIndex)
 
 // TODO: Learn about SFINAE and std::enable_if.
 
@@ -951,12 +948,12 @@ int main(int argc, char** argv) {
 				// NOTE: One would think that an improvement would be to snap all line numbers to the same column so as to avoid the text shifting to the right when line numbers go from 9 to 10 or from 99 to 100, but thats easier said than done, because we don't actually know how much room to leave in the column before reading the whole file.
 				LINE_WHILE_START				// NOTE: Since we should be prepared to read incredibly long files, I'm going to leave the snapping out, since we can't really implement it without giving ourselves a maximum amount of line numbers we can traverse.
 					if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << ' '; highlightMatches(); WRITE_LINE_SUFFIX << '\n'; lineCounter++; LINE_WHILE_CONTINUE; }
-					(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++;
+					(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; lineCounter++;
 				LINE_WHILE_END()
 			}
 			LINE_WHILE_START
 				if (REGEX_SEARCH) { highlightMatches(); WRITE_LINE_SUFFIX << '\n'; }
-				else { std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; }
+				else { std::cout.write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; }
 			LINE_WHILE_END()
 		}
 
@@ -1025,7 +1022,7 @@ int main(int argc, char** argv) {
 						}
 						VectorString* safestLine;
 						if (HistoryBuffer::peekSafestLine(safestLine)) {
-							size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { (std::cout << safestLineNum << ' ').write(safestLine->buffer, safestLine->bufferWriteHead) << '\n'; }
+							size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { (std::cout << safestLineNum << ' ').write(safestLine->data, safestLine->length) << '\n'; }
 						}
 						HistoryBuffer::pushWithAmountInc();
 						lineCounter++;
@@ -1046,7 +1043,7 @@ int main(int argc, char** argv) {
 									afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex;
 									continue;
 								}
-								(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
+								(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n';
 								lineCounter++;
 							INNER_WINDOWS_SIGNAL_CHECK_END
 						}
@@ -1070,7 +1067,7 @@ int main(int argc, char** argv) {
 						}
 						LINE_WHILE_CONTINUE;
 					}
-					VectorString* safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout.write(safestLine->buffer, safestLine->bufferWriteHead) << '\n'; }
+					VectorString* safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout.write(safestLine->data, safestLine->length) << '\n'; }
 					HistoryBuffer::pushWithAmountInc();
 				LINE_WHILE_END(HistoryBuffer::print())
 			}
@@ -1087,7 +1084,7 @@ int main(int argc, char** argv) {
 								padding = HistoryBuffer::buffer_lastIndex;
 								continue;
 							}
-							std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
+							std::cout.write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n';
 							padding--;
 						INNER_WINDOWS_SIGNAL_CHECK_END
 					}
@@ -1103,8 +1100,10 @@ int main(int argc, char** argv) {
 
 		if (flags::inverted) {
 			if (flags::only_line_nums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << '\n'; lineCounter++; LINE_WHILE_END() }
-			if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++; LINE_WHILE_END() }
-			LINE_WHILE_START if (REGEX_SEARCH) { LINE_WHILE_CONTINUE } std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; LINE_WHILE_END()				// TODO: Should we use regex_match here instead of regex_search? Is one better than the other or does it not matter?
+			if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; lineCounter++; LINE_WHILE_END() }
+			LINE_WHILE_START if (REGEX_SEARCH) { LINE_WHILE_CONTINUE } std::cout.write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; LINE_WHILE_END()
+			// NOTE: The above line doesn't look for match locations, but we still can't use regex_match, because that'll only return when the whole string matches, not just a substring of the string.
+			// NOTE: Using regex_match might be faster than regex_search, but I haven't found any source that says that definitively. We can't here anyway though, so it doesn't matter for now.
 		}
 		if (flags::only_line_nums) {
 			if (forcedOutputColoring) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << color::red << lineCounter << color::reset << '\n'; } lineCounter++; LINE_WHILE_END() }
@@ -1117,8 +1116,8 @@ int main(int argc, char** argv) {
 	if (flags::allLines) {
 		if (flags::inverted) { return 0; }
 		if (flags::only_line_nums) { MAIN_WHILE { INNER_INPUT_STREAM_DISCARD_LINE std::cout << lineCounter << '\n'; lineCounter++; } }					// NOTE: At first glance, it looks like InputStream and HistoryBuffer aren't being released here, but they are. This code is completely fine.
-		if (flags::lineNums) { LINE_WHILE_START (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++; LINE_WHILE_END() }
-		LINE_WHILE_START std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; LINE_WHILE_END()
+		if (flags::lineNums) { LINE_WHILE_START (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; lineCounter++; LINE_WHILE_END() }
+		LINE_WHILE_START std::cout.write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; LINE_WHILE_END()
 	}
 
 	if (flags::context) {
@@ -1181,7 +1180,7 @@ int main(int argc, char** argv) {
 					}
 					VectorString* safestLine;
 					if (HistoryBuffer::peekSafestLine(safestLine)) {
-						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { (std::cout << safestLineNum << ' ').write(safestLine->buffer, safestLine->bufferWriteHead) << '\n'; }
+						size_t safestLineNum; if (HistoryBuffer::peekSafestLineNum(safestLineNum)) { (std::cout << safestLineNum << ' ').write(safestLine->data, safestLine->length) << '\n'; }
 					}
 					HistoryBuffer::pushWithAmountInc();
 					lineCounter++;
@@ -1190,13 +1189,13 @@ int main(int argc, char** argv) {
 			LINE_WHILE_START
 				if (REGEX_SEARCH) {
 					HistoryBuffer::printLinesWithLineNums();
-					(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
+					(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n';
 					lineCounter++;
 					for (size_t afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; lineCounter < afterLastLineOfPadding; ) {
 						INNER_WINDOWS_SIGNAL_CHECK_START
 							CURRENT_LINE_ALIAS.clear();
 							INNER_INPUT_STREAM_READ_LINE
-							(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
+							(std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n';
 							lineCounter++;
 							if (REGEX_SEARCH) { afterLastLineOfPadding = lineCounter + HistoryBuffer::buffer_lastIndex; }
 						INNER_WINDOWS_SIGNAL_CHECK_END
@@ -1221,24 +1220,24 @@ int main(int argc, char** argv) {
 					}
 					LINE_WHILE_CONTINUE;
 				}
-				VectorString* safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout.write(safestLine->buffer, safestLine->bufferWriteHead) << '\n'; }
+				VectorString* safestLine; if (HistoryBuffer::peekSafestLine(safestLine)) { std::cout.write(safestLine->data, safestLine->length) << '\n'; }
 				HistoryBuffer::pushWithAmountInc();
 			LINE_WHILE_END(HistoryBuffer::print())
 		}
 		LINE_WHILE_START
 			if (REGEX_SEARCH) {
 				HistoryBuffer::print();
-				std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
+				std::cout.write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n';
 				for (unsigned int padding = HistoryBuffer::buffer_lastIndex; padding > 0; ) {
 					INNER_WINDOWS_SIGNAL_CHECK_START
 						CURRENT_LINE_ALIAS.clear();
 						INNER_INPUT_STREAM_READ_LINE
 						if (REGEX_SEARCH) {
-							std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
+							std::cout.write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n';
 							padding = HistoryBuffer::buffer_lastIndex;
 							continue;
 						}
-						std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n';
+						std::cout.write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n';
 						padding--;
 					INNER_WINDOWS_SIGNAL_CHECK_END
 				}
@@ -1250,12 +1249,12 @@ int main(int argc, char** argv) {
 
 	if (flags::inverted) {
 		if (flags::only_line_nums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } std::cout << lineCounter << '\n'; lineCounter++; LINE_WHILE_END() }
-		if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; lineCounter++; LINE_WHILE_END() }
-		LINE_WHILE_START if (REGEX_SEARCH) { LINE_WHILE_CONTINUE; } std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; LINE_WHILE_END()
+		if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { lineCounter++; LINE_WHILE_CONTINUE; } (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; lineCounter++; LINE_WHILE_END() }
+		LINE_WHILE_START if (REGEX_SEARCH) { LINE_WHILE_CONTINUE; } std::cout.write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; LINE_WHILE_END()
 	}
 	if (flags::only_line_nums) { LINE_WHILE_START if (REGEX_SEARCH) { std::cout << lineCounter << '\n'; } lineCounter++; LINE_WHILE_END() }
-	if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; } lineCounter++; LINE_WHILE_END() }
-	LINE_WHILE_START if (REGEX_SEARCH) { std::cout.write(CURRENT_LINE_ALIAS.buffer, CURRENT_LINE_ALIAS.bufferWriteHead) << '\n'; } LINE_WHILE_END()
+	if (flags::lineNums) { LINE_WHILE_START if (REGEX_SEARCH) { (std::cout << lineCounter << ' ').write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; } lineCounter++; LINE_WHILE_END() }
+	LINE_WHILE_START if (REGEX_SEARCH) { std::cout.write(CURRENT_LINE_ALIAS.data, CURRENT_LINE_ALIAS.length) << '\n'; } LINE_WHILE_END()
 }
 
 /*
