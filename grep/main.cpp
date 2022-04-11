@@ -818,7 +818,7 @@ std::cmatch matchData;
 #define CURRENT_LINE_ALIAS HistoryBuffer::buffer[HistoryBuffer::index]
 #define REGEX_SEARCH std::regex_search((const char*)CURRENT_LINE_ALIAS.data, (const char*)(CURRENT_LINE_ALIAS.data + CURRENT_LINE_ALIAS.length), matchData, keyphraseRegex)
 
-ptrdiff_t matchSuffixIndex;
+ptrdiff_t matchSuffixIndex;						// TODO: Compiling this program for x64 results in slower runtimes than a x86 exe. Why is that? That can't be write. Look at the hotpaths and make sure you're not doing anything stupid.
 
 void highlightMatches() {																							// I assume this will be inlined. Probably not in debug mode, but almost definitely in release mode.
 	matchSuffixIndex = 0;				// NOTE: Technically, unrolling the first iteration of the below loop would allow us to skip the overhead of initializing this variable to 0 and the overhead of the following additions, but the compiler probably does it for us.
