@@ -270,8 +270,8 @@ public:
 		capacity += VECTOR_STRING_BUFFER_SIZE_STEP;
 		char* tempBuffer = (char*)realloc(data, capacity);												// NOTE: Use realloc because we want to keep the data in the VectorString.
 		if (tempBuffer) { data = tempBuffer; return true; }
-		capacity -= VECTOR_STRING_BUFFER_SIZE_STEP;														// NOTE: Technically, we don't need to leave the object in a valid state if we fail, since the program always exits soon after, but for future expandability, I'm going to leave it in.
 		reportError("ran out of heap memory while enlarging VectorString");
+		capacity -= VECTOR_STRING_BUFFER_SIZE_STEP;														// NOTE: Technically, we don't need to leave the object in a valid state if we fail (as long as we don't leak memory), since the program always exits soon after, but for future expandability, I'm going to leave it in.
 		return false;
 	}
 
@@ -638,8 +638,8 @@ public:
 
 	errorBranch:
 		fds[1].fd = -1;																								// Tell poll to ignore the now unused entry in fds because some error prevented us from setting it up correctly.
-		return true;
 #endif
+		return true;
 	}
 
 	// NOTE: I think we probably could have just used the standard input buffering mechanisms (while retaining the ability to adjust buffer size) instead of building our own.
@@ -838,7 +838,7 @@ void highlightMatches() {																							// I assume this will be inlined
 // A couple of #defines to help reduce code bloat in the coming sections of the program.
 
 #ifdef PLATFORM_WINDOWS
-#define MAIN_WHILE if (!InputStream::init()) { HistoryBuffer::release(); return EXIT_FAILURE; } while (shouldLoopRun)
+#define MAIN_WHILE if (!InputStream::init()) { std::cout << "bruh\n"; HistoryBuffer::release(); return EXIT_FAILURE; } while (shouldLoopRun)
 #else
 #define MAIN_WHILE if (!InputStream::init()) { HistoryBuffer::release(); return EXIT_FAILURE; } while (true)
 #endif
