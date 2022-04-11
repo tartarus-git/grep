@@ -104,7 +104,7 @@ const char* helpText = "grep accepts text as input and outputs the lines from th
 					   "       grep <--help || --h>            -->            shows help text\n" \
 					   "\n" \
 					   "arguments:\n" \
-							"\t-c							   -->         be case sensitive when matching\n" \
+							"\t-c                              -->         be case sensitive when matching\n" \
 							"\t-a                              -->         print all lines from input but still color matches\n" \
 							"\t-l                              -->         print line numbers\n" \
 							"\t-v                              -->         invert output - print lines that would normally be omitted and omit lines that would normally be printed\n" \
