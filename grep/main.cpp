@@ -838,7 +838,7 @@ void highlightMatches() {																							// I assume this will be inlined
 // A couple of #defines to help reduce code bloat in the coming sections of the program.
 
 #ifdef PLATFORM_WINDOWS
-#define MAIN_WHILE if (!InputStream::init()) { std::cout << "bruh\n"; HistoryBuffer::release(); return EXIT_FAILURE; } while (shouldLoopRun)
+#define MAIN_WHILE if (!InputStream::init()) { HistoryBuffer::release(); return EXIT_FAILURE; } while (shouldLoopRun)
 #else
 #define MAIN_WHILE if (!InputStream::init()) { HistoryBuffer::release(); return EXIT_FAILURE; } while (true)
 #endif
