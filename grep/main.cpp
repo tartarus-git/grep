@@ -270,7 +270,8 @@ public:
 		bufferSize += VECTOR_STRING_BUFFER_STEP_SIZE;
 		char* tempBuffer = (char*)realloc(buffer, bufferSize);											// NOTE: Use realloc because we want to keep the data in the VectorString.
 		if (tempBuffer) { buffer = tempBuffer; return true; }
-		bufferSize -= VECTOR_STRING_BUFFER_STEP_SIZE;
+		bufferSize -= VECTOR_STRING_BUFFER_STEP_SIZE;													// NOTE: Technically, we don't need to leave the object in a valid state if we fail, since the program always exits soon after, but for future expandability, I'm going to leave it in.
+		reportError("ran out of heap memory while enlarging VectorString");
 		return false;
 	}
 
@@ -641,12 +642,15 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 	// NOTE: Plus, I haven't done any benchmarks. Maybe this is faster than the standard because the standard might do a bunch of safety checks and unnecessary stuff.
 
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
-	static bool refillBuffer() {			// TODO: Check for memory leaks with visual studio after going through the code.
-		// IMPORTANT-TODO: The main bug right now is this: The following resize code doesn't ever get triggered because windows never reads the full buffer from the file.
-		// I think this is because the full buffer size is used to know how much to read, but the actual buffer gets filled with \r\n converted to \n.
-		// That gets reflected in the returned bytesRead statistic, as stated in the docs.
-		// This means, we can basically never tell when we should resize the buffer based on the bytesReceived.
-		// How can we tell if not through that? No idea, figure something out.
+	// NOTE: I'm assuming that multiple copies of refillBuffer are generated, one for when the offset is 0 and one for when the offset is variable. That would be an optimization that I would expect the compiler to do. It would make the code faster.
+	static bool refillBuffer(size_t offset = 0) {			// TODO: Check for memory leaks with visual studio after going through the code.
+
+		// NOTE: In Windows, the following buffer expansion check basically never triggers, since the bytesReceived are almost always less than the total buffer size. The reason being that the total buffer size is used to determine the amount of bytes to read, but the amount of characters actually put into the buffer
+		// NOTE: is determined by how many \r\n's needed to be replaced with \n. Because of this discrepency, there is no good way to do the buffer expansion AFAIK. Still, I'm going to keep the check in, in case you decide to grep an input stream that only has \n.
+		// NOTE: If the ecosystem starts to stop being stupid and stops supporting \r\n in the future, having this code around will be helpful then.
+		// NOTE: Linux doesn't have this problem, not because of Linux itself, but because there are almost no files that use \r\n there.
+
+		// NOTE: We use free/malloc here instead of realloc because that is usually faster than realloc when you don't want to copy the contents of the allocation. That means that this block has to be before the following block, or else it will be filled and we would have to use realloc, which would be slower.
 		if (bytesReceived == bufferSize) {																			// Make buffer bigger if it is filled with one read syscall. This minimizes amount of syscalls we have to do. Buffer doesn't have the ability to get smaller again, doesn't need to.
 			if (bufferSize == INPUT_STREAM_BUFFER_MAX_SIZE) {														// NOTE: This comparison is only possible because INPUT_STREAM_BUFFER_MAX_SIZE is a multiple of INPUT_STREAM_BUFFER_SIZE_STEP.
 				delete[] buffer;																					// Delete current allocation to make room for the reallocation.
@@ -674,9 +678,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		if (fds[1].revents) { return false; }																		// Signal EOF if we caught a signal.
 #endif
 
-		bytesReceived = crossplatform_read(STDIN_FILENO, buffer, bufferSize);										// Read as much as we can fit into the buffer.
-		if (bytesReceived != bufferSize) { std::cout << "testthing hit --> " << bytesReceived << '\n'; }
-		else { std::cout << "normalthing hit\n"; }
+		bytesReceived = offset + crossplatform_read(STDIN_FILENO, buffer + offset, bufferSize - offset);			// Read as much as we can fit into the buffer.
 
 		if (bytesReceived == 0) { return false; }																	// In case of actual EOF, signal EOF.
 		if (bytesReceived == -1) {																					// In case of error, log and signal EOF.
@@ -684,7 +686,6 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 			return false;
 		}
 		bytesRead = 0;																								// If new data is read, the read head needs to be reset to the beginning of the buffer.
-
 
 		return true;
 	}
@@ -696,26 +697,36 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 		if (isReadPositionUnaligned) {
 			ssize_t limiter = bytesRead + 8 - (bytesRead % 8) - 1;													// TODO: Research if there is a more efficient way to do this. There is probably some fancy bit twiddling thing I could do here.
 			for (; bytesRead < limiter; bytesRead++) {
-				if (bytesRead == bytesReceived) { if (!refillBuffer()) { return false; } goto templabel; }
+				if (bytesRead == bytesReceived) {																	// NOTE: If out of buffer data, get more, but at a specific offset into the buffer, so that copying buffer into the VectorString later is still completely und utterly aligned.
+					limiter -= bytesRead;
+					ssize_t eatenLimiterBytes = 8 - (limiter + 1);													// Get difference in bytes between current position and the next-lowest 8 byte boundary.
+					if (!refillBuffer(eatenLimiterBytes)) { return false; }											// Refill buffer starting at that difference.
+					bytesRead = eatenLimiterBytes;																	// Start the read head at the difference as well. This makes it seem like all this effort is useless, but the whole point of this is the alignment of the memory, which is subtle.
+				}
 				if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
-				if (!(line += buffer[bytesRead])) { return false; }					// TODO: You need to clean up this part of the code I think.
+				if (!(line += buffer[bytesRead])) { return false; }
 			}
-			if (bytesRead == bytesReceived) { if (!refillBuffer()) { return false; } goto templabel; }			// NOTE: goto templabel because as soon as buffer is refilled, alignment is inherently there again.
-			if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = false; return true; }			// NOTE: We can safely do this without worry because the buffer always at least one character in it at this point. Because of the buffer refill before the limiter check inside of the loop. The order is important there.
-			if (!(line += buffer[bytesRead])) { return false; }				// TODO: Report error here and in other places like it.
-			bytesRead++;
-			isReadPositionUnaligned = false;
+			if (bytesRead == bytesReceived) {																		// NOTE: If we run out of data here, we can use precomputed values for the above data fetch algorithm, seeing as we're always one off from the next byte at this point.
+				if (!refillBuffer(7)) { return false; }
+				bytesRead = 8;
+				if (buffer[7] == '\n') { isReadPositionUnaligned = false; return true; }
+				if (!(line += buffer[7])) { return false; }
+				isReadPositionUnaligned = false;
+			}
+			else {
+				if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = false; return true; }
+				if (!(line += buffer[bytesRead])) { return false; }
+				bytesRead++;
+				isReadPositionUnaligned = false;
+			}
 		}
 
 		// TODO: This whole copying code could theoretically be avoided if we just always store the lines in the InputStream and just store indices to those lines in the HistoryBuffer.
 		// You would have to copy chunks of data around when resizing the InputStream, since we don't want those to get lost while doing that, but since the InputStream doesn't resize often in the grand scheme of things,
 		// it should actually be more efficient, with less overhead. It would be a major redesign and I don't want to do that right now, I'm leaving it as a future improvement.
 
-	templabel:
-
-
-		while (true) {														// NOTE: I could check for shouldLoopRun here, but it would only make sense for lines that are incredibly super duper mega long, which none really are. Doing a comparison here would probably bring more harm than good IMO.
-			for (; bytesRead < bytesReceived; bytesRead += 8) {													// NOTE: The - 7 is to make sure that, whatever happens, the bytesRead head (which is always snapped to the alignment bounds), doesn't cause unused memory to be read.
+		while (true) {																								// NOTE: I could check for shouldLoopRun here, but it would only make sense for lines that are incredibly super duper mega long, which none really are. Doing a comparison here would probably bring more harm than good IMO.
+			for (; bytesRead < bytesReceived - 7; bytesRead += 8) {													// NOTE: The - 7 is to make sure that, whatever happens, the bytesRead head (which is always snapped to the alignment bounds), doesn't cause unused memory to be read.
 
 				// NOTE: The above explanation of the - 7 leaves a little to be questioned. The main thing is: One would expect to use - 8, why - 7? - 8 would work almost as well, achieving exactly the same result in all cases but one:
 				// NOTE: That case is when bytesReceived ends on a completed byte and there is nothing wrong with reading the whole buffer from this loop. With - 8, that would cause the whole last byte not to be read, while - 7 would allow the byte to be read in that case.
@@ -723,9 +734,6 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 
 				// NOTE: This whole - 7 might also seem pointless because the buffer size is always a multiple of 8 anyway, making it impossible for unalignment issues to pop up. That isn't true though, since the buffer refill doesn't ever have to reach the end of the buffer.
 				// NOTE: When the user is creating the stdin input on the fly by typing things in, most of the time, the buffer refill won't be able to generate any sort of aligned buffer data, because the input data length is up to the user, making the - 7 here imperative.
-
-				// TODO: Right now, the -7 is gone for testing, put it back in once your done testing. We were testing why the tests still fail even when bytesReceived should be a multiple of 8 when reading from the majority of a file.
-				// The reason is stated above somewhere. So technically we're done testing.
 
 				if (buffer[bytesRead + 0] == '\n') { bytesRead++; isReadPositionUnaligned = true; return true; }
 				if (buffer[bytesRead + 1] == '\n') { if (!(line += buffer[bytesRead])) { return false; } bytesRead += 2; isReadPositionUnaligned = true; return true; }
@@ -737,19 +745,48 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 				if (buffer[bytesRead + 7] == '\n') { if (!line.write7(buffer + bytesRead)) { return false; } bytesRead += 8; return true; }
 				if (!(line += *(uint64_t*)(buffer + bytesRead))) { return false; }
 			}
-			/*for (; bytesRead < bytesReceived; bytesRead++) {														// NOTE: The above protection against reading unused memory causes there to be unread bytes in the buffer. There are always less than 8, which means we don't have to consider the case of \n being the last one like above.
+			for (; bytesRead < bytesReceived; bytesRead++) {														// NOTE: The above protection against reading unused memory causes there to be unread bytes in the buffer. There are always less than 8, which means we don't have to consider the case of \n being the last one like above.
 				if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = true; return true; }
 				if (!(line += buffer[bytesRead])) { return false; }
-			}*/
+			}
 			if (refillBuffer()) { continue; }																		// If we never encounter the end of the line in the current buffer, fetch more data.
 			return false;																							// If something went wrong while refilling buffer, return false.
 		}
 	}
 
 	// NOTE: If this function returns false, no garuantees are made about the validity and reusability of the class instance. Don't rely on either of those things.
-	static bool discardLine() {																	// Reads the next line but doesn't store it anywhere since we're only reading it to advance the read position. Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF, SIGINT, SIGTERM or error on Linux.
-		while (true) {						// TODO: This function needs to start setting the isReadPositionUnaligned flag when it needs to be set, or else it could unalign bytesRead, causing all sorts of artifacts.
-			for (; bytesRead < bytesReceived; bytesRead++) { if (buffer[bytesRead] == '\n') { bytesRead++; return true; } }							// Start reading all the data in current buffer and exit as soon as we've discarded an entire line.
+	static bool discardLine() {															// Reads the next line but doesn't store it anywhere since we're only reading it to advance the read position. Returns true on success. Returns false on EOF or error in Windows. Returns false on EOF, SIGINT, SIGTERM or error on Linux.
+		if (isReadPositionUnaligned) {
+			ssize_t limiter = bytesRead + 8 - (bytesRead % 8) - 1;													// TODO: Research if there is a more efficient way to do this. There is probably some fancy bit twiddling thing I could do here.
+			for (; bytesRead < limiter; bytesRead++) {
+				if (bytesRead == bytesReceived) {																	// NOTE: If there is no more data in the buffer, refill it. This inherently aligns the buffer, and since we don't care about any alignment with any VectorString, we can make use of that fact and directly goto transfer loop.
+					if (!refillBuffer()) { return false; }
+					goto MainTransferLoop;
+				}
+				if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
+			}
+			if (bytesRead == bytesReceived) {																		// NOTE: Contrary to in readLine, this block does the same thing as it's corresponding version inside of the loop.
+				if (!refillBuffer()) { return false; }
+				goto MainTransferLoop;
+			}
+			isReadPositionUnaligned = false;																		// No matter what happens, even if the last character we've got is a newline, the read position will be aligned again after we get out of this if statement.
+			if (buffer[bytesRead] == '\n') { bytesRead++; return true; }
+			bytesRead++;
+		}
+
+	MainTransferLoop:
+		while (true) {
+			for (; bytesRead < bytesReceived - 7; bytesRead += 8) {
+				if (buffer[bytesRead + 0] == '\n') { bytesRead++; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 1] == '\n') { bytesRead += 2; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 2] == '\n') { bytesRead += 3; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 3] == '\n') { bytesRead += 4; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 4] == '\n') { bytesRead += 5; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 5] == '\n') { bytesRead += 6; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 6] == '\n') { bytesRead += 7; isReadPositionUnaligned = true; return true; }
+				if (buffer[bytesRead + 7] == '\n') { bytesRead += 8; return true; }
+			}
+			for (; bytesRead < bytesReceived; bytesRead++) { if (buffer[bytesRead] == '\n') { bytesRead++; isReadPositionUnaligned = true; return true; } }			// NOTE: Read the left over bytes, same as in readLine().
 			if (refillBuffer()) { continue; }
 			return false;
 		}
