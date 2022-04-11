@@ -665,7 +665,7 @@ errorBranch:	fds[1].fd = -1;																						// Tell poll to ignore the now
 						return false;
 					}
 				}
-			}
+			}				// TODO: Think of ways to run this program like 10000 times and average the timing, so that it can be compared to the exe of another branch and I can accurately find out which one is faster.
 		}
 
 #ifndef PLATFORM_WINDOWS
