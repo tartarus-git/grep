@@ -684,13 +684,15 @@ public:
 		if (fds[1].revents) { return false; }																		// Signal EOF if we caught a signal.
 #endif
 
-		bytesReceived = offset + crossplatform_read(STDIN_FILENO, buffer + offset, bufferSize - offset);			// Read as much as we can fit into the buffer.
+		bytesReceived = crossplatform_read(STDIN_FILENO, buffer + offset, bufferSize - offset);						// Read as much as we can fit into the buffer.
 
 		if (bytesReceived == 0) { return false; }																	// In case of actual EOF, signal EOF.
 		if (bytesReceived == -1) {																					// In case of error, log and signal EOF.
 			reportError("failed to read from stdin");
 			return false;
 		}
+
+		bytesReceived += offset;																					// Offset bytesReceived by amount of prefix data that is in the buffer.
 		bytesRead = 0;																								// If new data is read, the read head needs to be reset to the beginning of the buffer.
 
 		return true;
