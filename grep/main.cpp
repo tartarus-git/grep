@@ -356,6 +356,7 @@ public:
 
 	void clear() { length = 0; }
 
+	// TODO: Replace this delete[] with a free. You don't have to worry about calling any destructors manually because char doesn't have anything like that. Make sure that this doesn't happen anywhere else in the codebase.
 	void release() { delete[] data; }																	// NOTE: delete and delete[] can throw exceptions, but only if the destructors of the objects in question throw exceptions (which isn't encouraged). In this situation, since the object in question is char, this never throws exceptions.
 };
 
